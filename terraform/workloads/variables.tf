@@ -257,3 +257,13 @@ variable "sandbox_service_caller_role_names" {
     error_message = "a role name, not an ARN or a path (letters, digits and +=,.@_- only)."
   }
 }
+
+variable "sandbox_session_scoped_caller_role_names" {
+  description = "Roles of this account (by name, each also listed in sandbox_service_caller_role_names) whose sandboxes belong to each STS session rather than to the role: for agent kernels whose sessions the platform mints per agent session (RoleSessionName = the runtime session id), so one agent session cannot see or drive another's sandboxes. Only list a role whose trust policy lets the platform alone assume it."
+  type        = list(string)
+  default     = []
+  validation {
+    condition     = alltrue([for n in var.sandbox_session_scoped_caller_role_names : contains(var.sandbox_service_caller_role_names, n)])
+    error_message = "every session-scoped caller must also be in sandbox_service_caller_role_names."
+  }
+}

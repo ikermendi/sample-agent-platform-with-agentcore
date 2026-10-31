@@ -189,6 +189,7 @@ module "portal" {
       var.sandbox_service_callers,
       [for n in var.sandbox_service_caller_role_names : "arn:aws:iam::${local.facts.account_id}:role/${n}"],
     )
+    session_scoped_callers = [for n in var.sandbox_session_scoped_caller_role_names : "arn:aws:iam::${local.facts.account_id}:role/${n}"]
   }
   oidc        = local.facts.portal.oidc
   name_suffix = var.name_suffix

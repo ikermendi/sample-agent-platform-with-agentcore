@@ -121,6 +121,8 @@ variable "sandbox" {
     idle_timeout_s  = number
     max_lifetime_s  = number
     service_callers = list(string)
+    # subset of service_callers whose sandboxes belong to each STS session
+    session_scoped_callers = optional(list(string), [])
   })
   default = {
     versions        = {}

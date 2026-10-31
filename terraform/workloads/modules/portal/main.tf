@@ -56,6 +56,8 @@ locals {
       PLATFORM_SANDBOX_IDLE_TIMEOUT_S  = tostring(var.sandbox.idle_timeout_s)
       PLATFORM_SANDBOX_MAX_LIFETIME_S  = tostring(var.sandbox.max_lifetime_s)
       PLATFORM_SANDBOX_SERVICE_CALLERS = join(",", var.sandbox.service_callers)
+      # roles whose every STS session is its own sandbox tenant (agent kernels)
+      PLATFORM_SANDBOX_SESSION_SCOPED_CALLERS = join(",", var.sandbox.session_scoped_callers)
       # where a workbench container reaches the sandbox tools: this backend
       # through the portal's own entry (CloudFront forwards /api/*)
       PLATFORM_SANDBOX_MCP_URL = length(var.sandbox.versions) > 0 ? "https://${var.portal.cloudfront_domain}/api/v1/sandbox-mcp" : ""

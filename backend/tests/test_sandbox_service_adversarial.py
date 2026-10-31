@@ -709,6 +709,42 @@ class ServiceEntryCallerTests(unittest.TestCase):
             with self.assertRaises(HTTPException):
                 self.api._caller("s3cret", OWNER)
 
+    def test_session_scoped_role_owns_per_session(self):
+        """An agent kernel's role is shared by every agent session: listed as
+        session-scoped, each STS session is its own tenant, so one session's
+        id is a 404 to another, and a bare role ARN (no session) is refused."""
+        from fastapi import HTTPException
+
+        kernel = "arn:aws:iam::00000000000:role/agent-kernel"
+        s1 = "arn:aws:sts::00000000000:assumed-role/agent-kernel/ses-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        s2 = "arn:aws:sts::00000000000:assumed-role/agent-kernel/ses-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        with patch.object(self.api.settings, "sandbox_service_callers", f"{OWNER},{kernel}"), \
+                patch.object(self.api.settings, "sandbox_session_scoped_callers", kernel):
+            o1, o2 = self.api._caller("s3cret", s1), self.api._caller("s3cret", s2)
+            self.assertEqual(o1, f"{kernel}#session/ses-{'a' * 34}")
+            self.assertNotEqual(o1, o2)
+            self.assertEqual(self.api._owner_session(o1), f"ses-{'a' * 34}")
+            # roles not listed as session-scoped keep the role-wide tenancy
+            self.assertEqual(self.api._caller("s3cret", "arn:aws:sts::00000000000:assumed-role/customer-host/x1"), OWNER)
+            self.assertEqual(self.api._owner_session(OWNER), "")
+            with self.assertRaises(HTTPException) as cm:
+                self.api._caller("s3cret", kernel)
+            self.assertEqual(cm.exception.status_code, 403)
+            self.assertEqual(cm.exception.detail["code"], "session_required")
+
+    def test_service_create_and_run_carry_the_session(self):
+        """The per-session cap on open sandboxes applies to agent sessions:
+        create and run pass the caller's session along."""
+        owner = "arn:aws:iam::00000000000:role/agent-kernel#session/ses-1"
+        with patch.object(self.api, "sandbox_service") as svc, patch.object(self.api, "audit_service"):
+            svc.create.return_value = {"runtime_session_id": "sbx-1"}
+            svc.run_submit.return_value = {"run_ref": "srun-1", "status": "running"}
+            self.api.svc_create(self.api.SandboxCreateRequest(), caller=owner)
+            self.assertEqual(svc.create.call_args.kwargs["owner"], owner)
+            self.assertEqual(svc.create.call_args.kwargs["owner_session"], "ses-1")
+            self.api.svc_run(self.api.SandboxRunRequest(command="true"), caller=owner)
+            self.assertEqual(svc.run_submit.call_args.kwargs["owner_session"], "ses-1")
+
     def test_kernel_file_content_is_not_echoed_by_write(self):
         self.assertNotIn("content_b64", self.api._read_public({"path": "x", "content_b64": "AAAA"}, include_content=False))
 

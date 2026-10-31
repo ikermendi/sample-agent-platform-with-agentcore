@@ -18,6 +18,7 @@ exec / background job / files, stop. ``run`` does a whole job in one call.
 
 import base64
 import binascii
+import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
@@ -59,11 +60,11 @@ def _read_public(r: dict, *, include_content: bool) -> dict:
 # owner=None: an administrator acting on any sandbox (portal only)
 
 
-def _create(req: SandboxCreateRequest, *, owner: str, source: str, actor: str) -> dict:
+def _create(req: SandboxCreateRequest, *, owner: str, source: str, actor: str, owner_session: str = "") -> dict:
     try:
         runtime = requested_runtime(req.runtime, req.platform_version)
         row = sandbox_service.create(owner=owner, source=source, version=req.version, runtime=runtime,
-                                     run_id=req.run_id, labels=req.labels)
+                                     run_id=req.run_id, labels=req.labels, owner_session=owner_session)
     except SandboxError as e:
         _raise(e)
     audit_service.record(actor, "sandbox.create", f"sandbox:{row['runtime_session_id']}",
@@ -84,13 +85,13 @@ def _stop(sandbox_id: str, owner, actor: str) -> dict:
     return row
 
 
-def _run(req: SandboxRunRequest, *, owner: str, source: str, actor: str) -> dict:
+def _run(req: SandboxRunRequest, *, owner: str, source: str, actor: str, owner_session: str = "") -> dict:
     """Submit a whole run; poll GET .../runs/{run_ref} for its report (a run
     outlives the 29 s API Gateway and 60 s CloudFront front doors)."""
     files = {p: _b64(c) for p, c in req.files.items()}
     runtime = _call(requested_runtime, req.runtime, req.platform_version)
     sub = _call(sandbox_service.run_submit, owner=owner, source=source, version=req.version, runtime=runtime, files=files,
-                command=req.command, timeout_s=req.timeout_s, env=req.env)
+                command=req.command, timeout_s=req.timeout_s, env=req.env, owner_session=owner_session)
     audit_service.record(actor, "sandbox.run", f"run:{sub['run_ref']}", f"{req.version}:{runtime or STANDARD}")
     return sub
 
@@ -161,17 +162,41 @@ def portal_stop(sandbox_id: str, user: str = Depends(require_admin)):
 # --------------------------------------------------------- service
 
 
+def _csv(value: str) -> set[str]:
+    return {a.strip() for a in value.split(",") if a.strip()}
+
+
+# The STS session name of a gateway-verified assumed-role ARN. The name is set
+# by whoever assumed the role, so per-session tenancy is only as good as that
+# role's trust policy: list a role in sandbox_session_scoped_callers only when
+# the platform alone mints its sessions.
+_ASSUMED_ROLE_SESSION = re.compile(r"^arn:aws[a-z-]*:sts::\d+:assumed-role/[^/]+/([\w+=,.@-]{2,64})$")
+SESSION_OWNER_SEP = "#session/"
+
+
 def _caller(x_service_entry_secret: str = Header(default=""), x_caller_arn: str = Header(default="")) -> str:
+    """The owner the caller's sandboxes are recorded under: its role ARN, or
+    ``<role ARN>#session/<session name>`` for a session-scoped role."""
     caller = _authenticate(x_service_entry_secret, x_caller_arn)
-    allowed = {a.strip() for a in settings.sandbox_service_callers.split(",") if a.strip()}
-    if caller not in allowed:
+    if caller not in _csv(settings.sandbox_service_callers):
         raise HTTPException(status_code=403, detail={"code": "caller_not_allowed", "message": "this IAM principal may not use the sandbox service"})
-    return caller
+    if caller not in _csv(settings.sandbox_session_scoped_callers):
+        return caller
+    m = _ASSUMED_ROLE_SESSION.match(x_caller_arn or "")
+    if not m:
+        raise HTTPException(status_code=403, detail={"code": "session_required", "message": "this role must call the sandbox service from an assumed-role session"})
+    return f"{caller}{SESSION_OWNER_SEP}{m.group(1)}"
+
+
+def _owner_session(owner: str) -> str:
+    """The session part of a session-scoped owner ("" for a role owner), so
+    the per-session cap on open sandboxes applies to agent sessions too."""
+    return owner.partition(SESSION_OWNER_SEP)[2]
 
 
 @service.post("")
 def svc_create(req: SandboxCreateRequest, caller: str = Depends(_caller)):
-    return _create(req, owner=caller, source="service", actor=caller)
+    return _create(req, owner=caller, source="service", actor=caller, owner_session=_owner_session(caller))
 
 
 @service.get("")
@@ -181,7 +206,7 @@ def svc_list(include_closed: bool = Query(False), caller: str = Depends(_caller)
 
 @service.post("/run")
 def svc_run(req: SandboxRunRequest, caller: str = Depends(_caller)):
-    return _run(req, owner=caller, source="service", actor=caller)
+    return _run(req, owner=caller, source="service", actor=caller, owner_session=_owner_session(caller))
 
 
 @service.get("/runs/{run_ref}")

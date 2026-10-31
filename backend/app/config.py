@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     # IAM principals (caller ARNs relayed by the service entry) allowed to use
     # the sandbox service API, comma-separated role ARNs; empty = none
     sandbox_service_callers: str = ""
+    # Callers (a subset of sandbox_service_callers) whose sandboxes belong to
+    # the STS session, not the role: every session of such a role is its own
+    # tenant. For roles whose sessions are minted per agent session by the
+    # platform (RoleSessionName = the runtime session id), so one agent session
+    # cannot list, drive or stop another's sandboxes. A call from such a role
+    # without an assumed-role session is refused.
+    sandbox_session_scoped_callers: str = ""
 
     # S3 bucket where kernels persist per-session workspaces
     workspace_bucket: str = ""

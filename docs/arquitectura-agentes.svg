@@ -70,7 +70,7 @@
         <rect class="box idmz" x="260" y="230" width="230" height="70" rx="8"/>
         <text class="bt" x="272" y="252">Autorizador Lambda</text>
         <text class="bs" x="272" y="270">valida el JWT de Entra</text>
-        <text class="bs" x="272" y="286">pasa oid y grupos</text>
+        <text class="bs" x="272" y="286">api lee oid y grupos</text>
         <rect class="box idmz" x="260" y="410" width="230" height="65" rx="8"/>
         <text class="bt" x="272" y="432">ALB web</text>
         <text class="bs" x="272" y="450">panel y app web</text>
@@ -104,7 +104,7 @@
         <text class="bs" x="602" y="480">chats · ejecuciones · eventos · OBO</text>
         <text class="bs" x="602" y="496">tareas · USAGE · catálogo · auditoría</text>
         <rect class="box work" x="845" y="440" width="125" height="80" rx="8"/>
-        <text class="bt" x="857" y="462">Lambdas Streams</text>
+        <text class="bt" x="857" y="462">Lambda Streams</text>
         <text class="bs" x="857" y="480">contadores (€)</text>
         <text class="bs" x="857" y="496">cierre (fin)</text>
         <rect class="box core" x="590" y="598" width="415" height="160" rx="8"/>

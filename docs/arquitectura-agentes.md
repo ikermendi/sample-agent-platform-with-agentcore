@@ -83,6 +83,46 @@ Leyenda: Cuenta iDMZ · Cuenta de la plataforma · AgentCore y kernel · Flujo d
 
 ## Recorrido de un mensaje
 
+Los doce pasos, como secuencia (los números de la lista de abajo son los del diagrama de arquitectura; la secuencia lleva su propia numeración por mensaje):
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant App as App Expo
+  participant GW as API Gateway (iDMZ)
+  participant API as api (backend)
+  participant SQS as SQS FIFO
+  participant L as Lambda lanzadora
+  participant K as Kernel (Runtime V2)
+  participant B as Bedrock
+  participant H as MCP Hub → MCP
+  participant D as DynamoDB
+  participant C as Lambda de cierre
+
+  App->>GW: POST /chats/{id}/runs (Idempotency-Key)
+  GW->>API: PrivateLink · oid y grupos
+  API->>D: ejecución pendiente · ejecucion_activa · OBO
+  API->>SQS: encola run_id
+  API-->>App: 202 run_id
+  App->>GW: GET /runs/{id}/events (SSE)
+  SQS->>L: mensaje
+  L->>D: reclama (arrancando)
+  L->>K: InvokeAgentRuntime (STS, token de ejecución)
+  K-->>L: aceptada (sigue en segundo plano)
+  loop bucle del agente
+    K->>B: modelo (VPC endpoint, credenciales STS)
+    K->>H: herramienta (token de ejecución · allow · aprobaciones · OBO)
+    K->>D: eventos · uso · latido
+    D-->>API: eventos nuevos (cada ~300 ms)
+    API-->>App: SSE
+  end
+  K->>D: estado terminada + fin (una transacción)
+  D->>C: Streams (fin)
+  C->>D: mensaje consolidado · libera ejecucion_activa
+  C-->>API: /internal/push
+  API-->>App: push (APNs / Web Push)
+```
+
 1. **Inicio de sesión.** La app Expo entra con Entra ID (OIDC + PKCE, MFA y acceso condicional) y obtiene un token para la API de la plataforma. [La app](#app).
 2. **Envío.** `POST /chats/{id}/runs` con `Idempotency-Key` al API Gateway REST de la iDMZ; el autorizador Lambda valida el JWT y pasa `oid` y grupos.
 3. **Entrada a la plataforma.** PrivateLink hasta el NLB interno y una réplica cualquiera del backend en Fargate.

@@ -486,6 +486,40 @@ Con cualquier `fin`, la Lambda de cierre (DynamoDB Streams) cierra la ejecución
 - **Lo que está a medias**: los scripts de skill reciben el `cancel_signal` de Strands en su contexto y paran; si no lo hacen en 30 s se abandonan; Code Interpreter se para (`StopCodeInterpreterSession`); una aprobación pendiente se marca caducada. Los ficheros generados hasta entonces se suben al espacio del chat.
 - **Cierre**: estado `cancelada` y `fin` con `motivo = cancelado` y el texto que llevaba; la Lambda de cierre consolida y libera el chat como siempre. Si el kernel no reacciona a la marca en 2 minutos (está colgado pero late), la Lambda vigilante lo trata como muerto y llama a `StopRuntimeSession`.
 
+Cómo se detecta y se cierra una ejecución que muere:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant K as Kernel (microVM)
+  participant D as DynamoDB
+  participant V as Lambda vigilante
+  participant AC as AgentCore
+  participant C as Lambda de cierre
+  participant API as api
+  participant App as App
+
+  loop cada ~30 s, en un hilo aparte
+    K->>D: ultimo_latido = ahora (solo si estado = en_marcha)
+  end
+  Note over K,D: la microVM muere o el kernel se cuelga del todo
+  loop cada minuto
+    V->>D: ejecuciones no terminadas (índice)
+    alt en_marcha y último latido > 2 min, o cancelar sin efecto > 2 min
+      V->>D: estado = fallida (condicional) + fin (motivo interrumpida)
+      V->>AC: StopRuntimeSession (por si sigue viva)
+      V->>D: incidencia en auditoría, fallo de la tarea si era programada
+    else pendiente o arrancando > 5 min
+      V->>D: estado = fallida + fin (interrumpida)
+    end
+  end
+  D->>C: Streams (fin)
+  C->>D: mensaje consolidado con lo que había · libera ejecucion_activa (si es de esa ejecución)
+  C-->>API: /internal/push
+  API-->>App: "la ejecución se ha interrumpido" · reintentar
+  Note over K,V: si el kernel vuelve, su siguiente latido falla (ya no está en_marcha) y se para
+```
+
 ### Lambda vigilante
 
 - **Para qué**: el kernel responde a la invocación al instante y sigue en segundo plano; nadie espera la respuesta. Si la microVM muere (falta de memoria, el código del modelo mata el kernel, AgentCore corta la sesión, el kernel se cuelga), nadie escribe "terminada": el chat se queda ocupado (409 a cada mensaje, la cola de la app no se vacía), la app sigue esperando y la tarea programada no termina nunca. Nada lo libera solo.
@@ -607,6 +641,43 @@ La única puerta de las herramientas MCP: dónde vive, qué comprueba en cada ll
 - **El hub no mira si la ejecución ha terminado**: valida la firma, la lista `allow` y las aprobaciones, y reenvía. Una llamada que esté en marcha cuando llega una cancelación o un `fin` se completa o falla sola y su resultado se descarta; si era sensible, ya pasó por aprobación. Quien sabe si una ejecución ha terminado es quien lo necesita para el usuario: `api` (409, cancelar) y la Lambda de cierre.
 - **Falla cerrado:** si el hub no puede comprobar algo (DynamoDB, el token OBO, el MCP de destino), deniega la llamada y lo devuelve como error de herramienta.
 
+Una herramienta que pide confirmación:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant K as Kernel (HumanInTheLoop)
+  participant D as DynamoDB
+  participant API as api
+  participant App as App
+  participant H as MCP Hub
+  participant M as MCP
+
+  K->>K: el modelo pide una herramienta con confirmar: true
+  K->>D: aprobación pendiente (ejecución, herramienta, hash de argumentos)
+  K->>D: evento aprobacion_pendiente
+  D-->>API: SSE
+  API-->>App: tarjeta de aprobación (push si la app está cerrada)
+  loop hasta 10 min, leyendo DynamoDB
+    K->>D: ¿decisión? ¿cancelar?
+  end
+  alt el usuario aprueba
+    App->>API: POST /runs/{id}/approvals/{approval_id}
+    API->>D: aprobación concedida, sin usar
+    K->>H: llamada a la herramienta (token de ejecución)
+    H->>D: busca aprobación concedida y sin usar para ejecución + herramienta + hash
+    H->>D: la marca como usada (un solo uso)
+    H->>M: reenvía
+  else rechaza
+    App->>API: rechazo
+    K->>K: la herramienta se deniega con motivo, el modelo sigue sin ella
+  else caduca (10 min)
+    K->>D: aprobación caducada
+    K->>D: fin (motivo aprobacion_caducada)
+  end
+  Note over App,M: sin aprobación el hub deniega aunque el kernel lo pida: el control real está aquí
+```
+
 ### Confirmación antes de acciones sensibles
 
 - **Qué herramientas**: las marcadas con `confirmar: true` (las de skills en `tools.yaml`; las de los MCP en su registro del hub, en CDK). Típicamente las que escriben o envían algo como el usuario. Una versión de agente puede añadir confirmaciones, pero no quitar las marcadas.
@@ -668,6 +739,45 @@ Lo que puede hacer un agente si alguien ejecuta código en su microVM. El objeti
 - **Sin MSAL para esto**: MSAL para Node (comprobado en su código, versión 7.1.2) no renueva tokens OBO con el refresh token; su propio código dice que el usuario tiene que volver a enviar su token cuando el de acceso caduca. MSAL para .NET sí tiene un modo de "OBO de larga duración". Por eso el backend hace las dos peticiones con una librería OAuth estándar (por ejemplo `oauth4webapi`), que son dos llamadas HTTP al endpoint de tokens de Entra.
 - **Cuánto dura**: los refresh tokens de Entra caducan, por defecto, tras unos 90 días sin usarse y se renuevan con cada uso; las tareas programadas funcionan mientras el usuario haya usado la app en ese periodo y nada haya revocado sus sesiones.
 
+Cómo se mide, se avisa y se corta el gasto:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant K as Kernel
+  participant B as Bedrock
+  participant D as DynamoDB
+  participant C as Lambda de contadores
+  participant IAM as IAM (rol de sesión)
+  participant API as api
+  participant App as App
+  participant A as admin
+
+  K->>D: lee USAGE#oid#mes (hook BeforeModelCallEvent)
+  alt gasto < límite
+    K->>B: llamada al modelo
+    K->>D: evento de uso (modelo, tokens)
+    D->>C: Streams (filtro: uso)
+    C->>D: suma € en USAGE#oid#mes y en el chat
+    opt cruza el 80 % o el 100 %
+      C->>D: marca en el contador
+      C-->>API: /internal/push (si se puede)
+      API-->>App: push "presupuesto al 80 %"
+    end
+    opt supera el límite
+      C->>D: añade oid a DENY# (versión condicional)
+      C->>IAM: PutRolePolicy: Deny Bedrock si SourceIdentity = oid
+    end
+  else gasto ≥ límite
+    K->>D: fin (motivo limite)
+    Note over K,B: una sesión ya en marcha que lo intente recibe AccessDenied de IAM
+  end
+  A->>D: sube un límite o crea una excepción
+  A->>D: recalcula DENY# (quita los que quedan por debajo)
+  A->>IAM: PutRolePolicy con la lista nueva
+  Note over C,IAM: el día 1, un horario invoca a contadores para vaciar DENY#
+```
+
 ### Control del uso por usuario
 
 - **Regla:** el kernel mide y avisa; IAM corta. El kernel llama a Bedrock directamente, así que el corte que no depende de él es una denegación de IAM sobre las sesiones del usuario.
@@ -687,6 +797,42 @@ Lo que puede hacer un agente si alguien ejecuta código en su microVM. El objeti
 ## Operación
 
 Tareas programadas, las Lambdas, la auditoría, la retención y cómo seguir un mensaje de punta a punta.
+
+Un disparo de principio a fin:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as EventBridge Scheduler
+  participant Q as SQS FIFO
+  participant L as Lambda lanzadora
+  participant D as DynamoDB
+  participant API as api
+  participant E as Entra ID
+  participant K as Kernel
+
+  S->>Q: disparo (tarea, hora programada)
+  Q->>L: mensaje (run_id = hash(tarea, hora))
+  L->>D: tarea activa? usuario con acceso (grupos en USER#)? presupuesto?
+  alt la ejecución anterior sigue en marcha
+    L->>D: anota "disparo saltado"
+  else
+    L->>D: crea la ejecución (pendiente) + ejecucion_activa en el chat de la tarea
+    L->>API: /internal/obo por cada MCP con OBO del agente
+    API->>E: refresh_token → token nuevo (si hace falta)
+    alt Entra rechaza
+      API-->>L: rechazado
+      L->>D: tarea pausada · fin (error) · incidencia
+      L-->>API: push "vuelve a abrir la app"
+    else
+      API-->>L: vigente
+      L->>D: reclama (arrancando)
+      L->>K: InvokeAgentRuntime (STS, token de ejecución)
+      K-->>L: aceptada
+      Note over API,K: ejecución normal, al terminar, cierre y push como en un chat
+    end
+  end
+```
 
 ### Tareas programadas
 

@@ -94,8 +94,8 @@
         <text class="bs" x="827" y="182">crea la ejecución y la encola</text>
         <text class="bs" x="827" y="198">OBO · rutas internas · push</text>
         <rect class="box work" x="1045" y="110" width="180" height="56" rx="8"/>
-        <text class="bt" x="1057" y="132">Lambda vigilante</text>
-        <text class="bs" x="1057" y="150">ejecuciones caídas</text>
+        <text class="bt" x="1057" y="132">Vigilante y borrado</text>
+        <text class="bs" x="1057" y="150">Lambdas · caídas · chats</text>
         <rect class="box work" x="1045" y="186" width="180" height="56" rx="8"/>
         <text class="bt" x="1057" y="208">Lambda lanzadora</text>
         <text class="bs" x="1057" y="226">chats y tareas · STS · firma</text>

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
         <title id="dg-title">Diagrama de la arquitectura</title>
-        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api y las Lambdas vigilante y lanzadora; las Lambdas de contadores y cierre, dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS FIFO por la que entra toda ejecución (el backend encola los chats y Scheduler las tareas; la lanzadora las arranca), la VPC de agentes con el kernel en AgentCore Runtime V2, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Memory, Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
+        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api y las Lambdas vigilante y lanzadora; las Lambdas de contadores y cierre, dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS FIFO por la que entra toda ejecución (el backend encola los chats y Scheduler las tareas; la lanzadora las arranca), la VPC de agentes con el kernel en AgentCore Runtime V2, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
         <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;font-family:var(--font-sans);background:#fff}
 .frame { fill: none; stroke-width: 1.5; }
 .frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
@@ -149,8 +149,8 @@
         <text class="bs" x="1292" y="292">secreto de Entra (OBO) · credenciales de los MCP</text>
         <rect class="box work" x="1280" y="430" width="125" height="90" rx="8"/>
         <text class="bt" x="1292" y="452">S3</text>
-        <text class="bs" x="1292" y="470">espacios de</text>
-        <text class="bs" x="1292" y="486">chat · skills</text>
+        <text class="bs" x="1292" y="470">chats y memoria</text>
+        <text class="bs" x="1292" y="486">skills</text>
         <text class="bs" x="1292" y="502">documentos</text>
         <rect class="box br" x="1425" y="430" width="135" height="90" rx="8"/>
         <text class="bt" x="1437" y="452">Bedrock</text>
@@ -162,12 +162,6 @@
         <text class="bs" x="1592" y="470">Bases (RAG)</text>
         <text class="bs" x="1592" y="486">filtros por</text>
         <text class="bs" x="1592" y="502">agente y grupo</text>
-        <rect class="box core" x="265" y="900" width="210" height="130" rx="8"/>
-        <text class="bt" x="277" y="922">AgentCore Memory</text>
-        <text class="bs" x="277" y="940">actorId = oid · sesión = chat</text>
-        <text class="bs" x="277" y="956">conversación del agente</text>
-        <text class="bs" x="277" y="972">preferencias y hechos</text>
-        <text class="bs" x="277" y="988">borrado a petición</text>
         <rect class="box core" x="505" y="900" width="290" height="130" rx="8"/>
         <text class="bt" x="517" y="922">Code Interpreter</text>
         <text class="bs" x="517" y="940">solo agentes en ese modo</text>
@@ -231,8 +225,6 @@
         <g class="badge"><circle cx="550" cy="500" r="11"/><text x="550" y="500">12</text></g>
         <path class="wire" d="M115,615 V637" marker-end="url(#arr)"/>
         <path class="wire" d="M20,588 H8 V262 H17" marker-end="url(#arr)"/>
-        <path class="wire" d="M590,740 H360 V897" marker-end="url(#arr)"/>
-        <text class="wl" x="370" y="732">memoria</text>
         <path class="wire" d="M630,785 V897" marker-end="url(#arr)"/>
         <g class="badge"><circle cx="630" cy="840" r="11"/><text x="630" y="840">8</text></g>
       </svg>

@@ -114,7 +114,7 @@ sequenceDiagram
     K->>B: modelo (VPC endpoint, credenciales STS)
     K->>H: herramienta (token de ejecución · allow · aprobaciones · OBO)
     K->>D: eventos · uso · latido
-    API->>D: consulta los eventos nuevos (cada ~300 ms)
+    API->>D: consulta los eventos nuevos (300 ms, hasta 1 s en los silencios)
     API-->>App: SSE
     opt el usuario pulsa "parar"
       App->>GW: POST /runs/{id}/cancel
@@ -141,7 +141,7 @@ sequenceDiagram
 7. **Herramientas MCP.** Todas por el MCP Hub (VPC de integraciones, por PrivateLink) con el token de ejecución: lista `allow`, aprobaciones, identidad de ejecución u OBO (pedido al backend), auditoría, y falla cerrado. [Red](#red), [Identidad](#identidad).
 8. **Skills, código y ficheros.** Los scripts de skills corren en el kernel como herramientas tipadas; el código del modelo, en la microVM (modo local) o en Code Interpreter; el kernel sincroniza el espacio del chat con S3 y emite `fichero` por cada fichero nuevo. [El agente en ejecución](#agente).
 9. **Eventos y coste.** El kernel escribe en DynamoDB, bajo su ejecución, el texto (cada ~250 ms), las herramientas, los ficheros, el uso de tokens y un latido cada 30 s; la Lambda de contadores suma el gasto del mes por Streams.
-10. **Lectura en la app.** `GET /runs/{id}/events` (SSE) en cualquier réplica: el backend consulta los eventos nuevos de esa ejecución en DynamoDB cada ~300 ms por conexión abierta (una consulta por clave, barata) y reconecta con `Last-Event-ID`; `POST /runs/{id}/cancel` para parar; ficheros con URL prefirmada.
+10. **Lectura en la app.** `GET /runs/{id}/events` (SSE) en cualquier réplica: el backend consulta los eventos nuevos de esa ejecución en DynamoDB por conexión abierta (una consulta por clave, barata) con espera creciente: 300 ms mientras llegan eventos y, en los silencios, 500 → 800 → 1 000 ms, con tope en 1 s (hasta 5 s durante una aprobación pendiente), volviendo a 300 ms en cuanto llega algo; el streaming de texto no lo nota y se ahorra alrededor de la mitad de las consultas; reconecta con `Last-Event-ID`; `POST /runs/{id}/cancel` para parar; ficheros con URL prefirmada.
 11. **Fin.** El kernel escribe `fin` (con motivo, uso y coste). La Lambda de cierre, al verlo, guarda el mensaje consolidado en el chat, borra `ejecucion_activa` (salen los mensajes en cola de la app) y avisa al backend. [Ciclo de vida](#ciclo).
 12. **App en segundo plano.** El backend envía la notificación por APNs o Web Push (salida por Netskope). Los chats no visibles se actualizan con `GET /chats?updated_since=…`.
 

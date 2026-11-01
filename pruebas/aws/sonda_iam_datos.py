@@ -18,8 +18,10 @@ aunque algo falle. Coste: céntimos. Uso:
 
     python sonda_iam_datos.py            # crea, prueba y borra
     python sonda_iam_datos.py --conservar  # no borra (para mirar en la consola)
+    SONDA_REGION=eu-north-1 python sonda_iam_datos.py  # otra región (por defecto us-east-1)
 """
 import json
+import os
 import sys
 import time
 import uuid
@@ -28,7 +30,7 @@ import concurrent.futures as cf
 import boto3
 from botocore.exceptions import ClientError
 
-REGION = "us-east-1"
+REGION = os.environ.get("SONDA_REGION", "us-east-1")
 SUF = uuid.uuid4().hex[:8]
 NOMBRE = f"sonda-n2-{SUF}"
 TAGS = [{"Key": "sonda", "Value": "nivel2"}]
@@ -79,7 +81,8 @@ def crear():
                                            {"AttributeName": "sk", "AttributeType": "S"}],
                      KeySchema=[{"AttributeName": "pk", "KeyType": "HASH"},
                                 {"AttributeName": "sk", "KeyType": "RANGE"}])
-    s3.create_bucket(Bucket=NOMBRE)
+    s3.create_bucket(Bucket=NOMBRE, **({} if REGION == "us-east-1" else
+                     {"CreateBucketConfiguration": {"LocationConstraint": REGION}}))
     s3.put_bucket_tagging(Bucket=NOMBRE, Tagging={"TagSet": TAGS})
 
     confianza = {"Version": "2012-10-17", "Statement": [{

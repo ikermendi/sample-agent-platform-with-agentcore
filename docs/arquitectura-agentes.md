@@ -115,8 +115,16 @@ sequenceDiagram
     K->>D: eventos · uso · latido
     D-->>API: eventos nuevos (cada ~300 ms)
     API-->>App: SSE
+    opt el usuario pulsa "parar"
+      App->>GW: POST /runs/{id}/cancel
+      GW->>API: PrivateLink
+      API->>D: cancelar = true (si no ha terminado)
+      API-->>App: 202
+      K->>D: el hilo del latido ve la marca
+      K->>K: agent.cancel(): para en el siguiente punto seguro
+    end
   end
-  K->>D: estado terminada + fin (una transacción)
+  K->>D: estado terminada (o cancelada) + fin con su motivo (una transacción)
   D->>C: Streams (fin)
   C->>D: mensaje consolidado · libera ejecucion_activa
   C-->>API: /internal/push

@@ -364,6 +364,84 @@ Next.js con la interfaz hecha con shadcn/ui (componentes sobre Base UI, su opci�
 
 Dónde corre el kernel y qué hace durante una ejecución.
 
+Qué hace el kernel al recibir una ejecución:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant L as Lambda lanzadora
+  participant K as Kernel (BedrockAgentCoreApp)
+  participant D as DynamoDB
+  participant S3 as S3
+  participant M as AgentCore Memory
+  participant H as MCP Hub
+
+  L->>K: InvokeAgentRuntime (carga: mensaje, versión del agente, límite, credenciales STS, token de ejecución, turno_anterior?)
+  K-->>L: aceptada (la ejecución sigue en @app.async_task, /ping = HealthyBusy)
+  K->>D: estado = en_marcha (condicional desde arrancando)
+  K->>K: hilo del latido (cada 30 s) · clientes de AWS con las credenciales STS de la carga
+  K->>S3: skills/{id}/{versión}/ de cada skill@versión de la versión del agente
+  K->>K: comprueba los hashes · carga SKILL.md y tools.yaml
+  K->>S3: sync de espacios/{usuario}/{chat}/ (entrada/, trabajo/, salida/) a la carpeta local
+  K->>M: AgentCoreMemorySessionManager carga la conversación (sesión = chat)
+  opt turno_anterior en la carga
+    K->>K: añade el mensaje interrumpido y la nota "la respuesta anterior se interrumpió"
+  end
+  K->>H: tools/list con el token de ejecución (MCPClient, Streamable HTTP)
+  H-->>K: solo las herramientas de la lista allow de la versión
+  K->>K: monta el Agent: modelo de la versión · herramientas del hub · plugin AgentSkills (nombre y descripción de cada skill) · subagentes como herramientas
+  K->>K: HumanInTheLoop (confirmar) · intervención de comandos · Limits · SequentialToolExecutor · Sandbox (local o Code Interpreter) · hook de presupuesto
+  K->>K: vuelve a registrar las herramientas de las skills ya activadas en este chat
+  K->>D: evento estado "pensando"
+  Note over K,D: empieza el bucle del agente (ver "Una vuelta del bucle")
+```
+
+Y una vuelta del bucle del agente, con las intervenciones y las herramientas:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant K as Kernel (Strands)
+  participant D as DynamoDB
+  participant B as Bedrock
+  participant S3 as S3
+  participant H as MCP Hub
+  participant M as AgentCore Memory
+
+  K->>D: hook BeforeModelCallEvent: lee USAGE#35;oid#35;mes
+  alt gasto ≥ límite o Limits agotados
+    K->>D: fin (motivo limite)
+  else
+    K->>B: llamada al modelo (streaming, credenciales STS)
+    K->>D: texto cada ~250 ms · razonamiento · uso de tokens
+    K->>M: mensajes del turno (gestor de sesión, por lotes)
+    alt el modelo pide una herramienta
+      K->>D: herramienta_inicio
+      alt shell o código (modo local)
+        K->>K: intervención: Deny si algún token es aws, curl, env, 169.254…
+        K->>K: ejecuta en la microVM, sobre la carpeta del chat, con límites
+      else skill (activar)
+        K->>K: plugin AgentSkills devuelve el SKILL.md · AfterToolCallEvent registra las herramientas de tools.yaml
+      else script de una skill
+        K->>K: proceso sin credenciales, solo rutas locales
+      else herramienta del hub
+        K->>H: tools/call con el token de ejecución
+        H->>H: allow · aprobación concedida y sin usar (si confirmar) · identidad de ejecución u OBO
+        H-->>K: resultado (o error de herramienta si deniega)
+      else subagente
+        K->>K: otro Agent con su allow y su sesión de Memory {chat}#35;{subagente}, misma frontera
+      end
+      opt la herramienta genera ficheros
+        K->>S3: sube lo nuevo de trabajo/ y salida/ (sin borrar)
+        K->>D: registro del fichero · evento fichero
+      end
+      K->>D: herramienta_fin (estado, duración, resumen)
+      Note over K: las herramientas van de una en una (SequentialToolExecutor) · el hilo del latido sigue aparte
+    end
+  end
+  Note over K,M: se repite hasta end_turn, cancelar, límite o 55 minutos, y entonces: estado + fin en una transacción
+```
+
 ### Por qué un kernel propio
 
 - Sin AgentCore Gateway, Identity ni interceptor: el kernel propio llama directamente a Bedrock, Code Interpreter y Memory con las credenciales STS de la sesión, y todas las herramientas MCP pasan por nuestro MCP Hub; los scripts de skills corren en el propio kernel.
@@ -761,19 +839,19 @@ sequenceDiagram
   participant App as App
   participant A as admin
 
-  K->>D: lee USAGE#oid#mes (hook BeforeModelCallEvent)
+  K->>D: lee USAGE#35;oid#35;mes (hook BeforeModelCallEvent)
   alt gasto < límite
     K->>B: llamada al modelo
     K->>D: evento de uso (modelo, tokens)
     D->>C: Streams (filtro: uso)
-    C->>D: suma € en USAGE#oid#mes y en el chat
+    C->>D: suma € en USAGE#35;oid#35;mes y en el chat
     opt cruza el 80 % o el 100 %
       C->>D: marca en el contador
       C-->>API: /internal/push (si se puede)
       API-->>App: push "presupuesto al 80 %"
     end
     opt supera el límite
-      C->>D: añade oid a DENY# (versión condicional)
+      C->>D: añade oid a DENY#35; (versión condicional)
       C->>IAM: PutRolePolicy: Deny Bedrock si SourceIdentity = oid
     end
   else gasto ≥ límite
@@ -781,9 +859,9 @@ sequenceDiagram
     Note over K,B: una sesión ya en marcha que lo intente recibe AccessDenied de IAM
   end
   A->>D: sube un límite o crea una excepción
-  A->>D: recalcula DENY# (quita los que quedan por debajo)
+  A->>D: recalcula DENY#35; (quita los que quedan por debajo)
   A->>IAM: PutRolePolicy con la lista nueva
-  Note over C,IAM: el día 1, un horario invoca a contadores para vaciar DENY#
+  Note over C,IAM: el día 1, un horario invoca a contadores para vaciar DENY#35;
 ```
 
 ### Control del uso por usuario
@@ -821,7 +899,7 @@ sequenceDiagram
 
   S->>Q: disparo (tarea, hora programada)
   Q->>L: mensaje (run_id = hash(tarea, hora))
-  L->>D: tarea activa? usuario con acceso (grupos en USER#)? presupuesto?
+  L->>D: tarea activa? usuario con acceso (grupos en USER#35;)? presupuesto?
   alt la ejecución anterior sigue en marcha
     L->>D: anota "disparo saltado"
   else

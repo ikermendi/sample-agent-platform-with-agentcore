@@ -1,0 +1,243 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
+        <title id="dg-title">Diagrama de la arquitectura</title>
+        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api y las Lambdas vigilante y lanzadora; las Lambdas de contadores y cierre, dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS FIFO por la que entra toda ejecución (el backend encola los chats y Scheduler las tareas; la lanzadora las arranca), la VPC de agentes con el kernel en AgentCore Runtime V2, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora, mcp-auditoria y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Memory, Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
+        <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;font-family:var(--font-sans);background:#fff}
+.frame { fill: none; stroke-width: 1.5; }
+.frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
+.frame.work { stroke: var(--work); fill: var(--work-bg); }
+.frame.vpc { stroke: var(--work); stroke-dasharray: 6 4; fill: var(--surface); fill-opacity: .55; }
+.frame.core { stroke: var(--core); fill: var(--core-bg); }
+.frame.engine { stroke: var(--core); stroke-dasharray: 6 4; fill: var(--surface); fill-opacity: .45; }
+.frame-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; font-weight: 500; }
+.frame-label.idmz { fill: var(--idmz); }
+.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.box.ext { stroke: var(--ext); }
+.bt { font-family: var(--font-display); font-size: 14px; font-weight: 600; fill: var(--ink); }
+.bs { font-family: var(--font-body); font-size: 11.5px; fill: var(--muted); }
+.mono { font-family: var(--font-mono); font-size: 11px; fill: var(--muted); }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.6; }
+.wire.dash { stroke-dasharray: 5 4; }
+.wire.warn { stroke: var(--warn); stroke-dasharray: 5 4; }
+.wl { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+.badge circle { fill: var(--accent); }
+.badge text { font-family: var(--font-mono); font-size: 11px; font-weight: 600; fill: var(--surface); text-anchor: middle; dominant-baseline: central; }
+.bs-note { font-size: 12.5px; color: var(--muted); }</style>
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--wire)"/>
+          </marker>
+        </defs>
+        <text class="frame-label ext" x="20" y="62">Externo</text>
+        <rect class="frame idmz" x="240" y="40" width="270" height="470" rx="10"/>
+        <text class="frame-label idmz" x="254" y="62">Cuenta iDMZ</text>
+        <rect class="frame work" x="540" y="40" width="1200" height="790" rx="10"/>
+        <text class="frame-label work" x="554" y="62">Cuenta de la plataforma · us-east-1</text>
+        <rect class="frame vpc" x="565" y="80" width="685" height="320" rx="10"/>
+        <text class="frame-label work" x="579" y="102" style="font-size:10.5px">VPC de servicios · sin IGW · VPC endpoints</text>
+        <rect class="frame engine" x="565" y="565" width="460" height="240" rx="10"/>
+        <text class="frame-label core" x="579" y="587" style="font-size:10.5px">VPC de agentes · sin rutas · DNS Firewall</text>
+        <rect class="frame vpc" x="1060" y="565" width="655" height="240" rx="10"/>
+        <text class="frame-label work" x="1074" y="587" style="font-size:10.5px">VPC de integraciones MCP · → red corporativa (TGW / DX / VPN)</text>
+        <text class="frame-label work" x="1280" y="62" style="font-size:10.5px">Servicios regionales</text>
+        <rect class="frame core" x="240" y="860" width="790" height="320" rx="10"/>
+        <text class="frame-label core" x="254" y="882">Amazon Bedrock AgentCore · servicios gestionados</text>
+        <rect class="box ext" x="20" y="110" width="190" height="80" rx="8"/>
+        <text class="bt" x="32" y="132">App Expo</text>
+        <text class="bs" x="32" y="150">iOS y web · assistant-ui</text>
+        <text class="bs" x="32" y="166">Entra (OIDC + PKCE) · SSE</text>
+        <rect class="box ext" x="20" y="220" width="190" height="85" rx="8"/>
+        <text class="bt" x="32" y="242">Microsoft Entra ID</text>
+        <text class="bs" x="32" y="260">login · MFA · acceso</text>
+        <text class="bs" x="32" y="276">condicional · grupos · OBO</text>
+        <rect class="box ext" x="20" y="335" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="357">Administradores</text>
+        <text class="bs" x="32" y="375">grupos de admins de Entra</text>
+        <rect class="box ext" x="20" y="410" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="432">Akamai</text>
+        <text class="bs" x="32" y="450">CDN · WAF · panel y app web</text>
+        <rect class="box ext" x="20" y="560" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="582">Netskope</text>
+        <text class="bs" x="32" y="600">salida a internet</text>
+        <rect class="box ext" x="20" y="640" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="662">Apple APNs · Web Push</text>
+        <text class="bs" x="32" y="680">notificaciones</text>
+        <rect class="box idmz" x="260" y="95" width="230" height="105" rx="8"/>
+        <text class="bt" x="272" y="117">API Gateway REST</text>
+        <text class="bs" x="272" y="135">response streaming (SSE)</text>
+        <text class="bs" x="272" y="151">WAF · cuotas por cliente</text>
+        <text class="mono" x="272" y="167">/chats /runs /agents /me/*</text>
+        <rect class="box idmz" x="260" y="230" width="230" height="70" rx="8"/>
+        <text class="bt" x="272" y="252">Autorizador Lambda</text>
+        <text class="bs" x="272" y="270">valida el JWT de Entra</text>
+        <text class="bs" x="272" y="286">pasa oid y grupos</text>
+        <rect class="box idmz" x="260" y="410" width="230" height="65" rx="8"/>
+        <text class="bt" x="272" y="432">ALB web</text>
+        <text class="bs" x="272" y="450">panel y app web</text>
+        <text class="bs" x="272" y="466">desde Akamai · PrivateLink</text>
+        <rect class="box work" x="590" y="110" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="132">NLB interno</text>
+        <text class="bs" x="602" y="150">servicio de PrivateLink</text>
+        <rect class="box work" x="590" y="180" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="202">App web (Expo)</text>
+        <text class="bs" x="602" y="220">estática · nginx · Fargate</text>
+        <rect class="box work" x="590" y="250" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="272">Panel de administración</text>
+        <text class="bs" x="602" y="290">Next.js · solo interfaz</text>
+        <rect class="box work" x="590" y="320" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="342">Admin API</text>
+        <text class="bs" x="602" y="360">para el panel · agentes · precios</text>
+        <rect class="box work" x="815" y="110" width="195" height="150" rx="8"/>
+        <text class="bt" x="827" y="132">Backend API</text>
+        <text class="bs" x="827" y="150">TypeScript · Fargate</text>
+        <text class="bs" x="827" y="166">sin estado · SSE</text>
+        <text class="bs" x="827" y="182">crea la ejecución y la encola</text>
+        <text class="bs" x="827" y="198">OBO · rutas internas · push</text>
+        <rect class="box work" x="1045" y="110" width="180" height="56" rx="8"/>
+        <text class="bt" x="1057" y="132">Lambda vigilante</text>
+        <text class="bs" x="1057" y="150">ejecuciones caídas</text>
+        <rect class="box work" x="1045" y="186" width="180" height="56" rx="8"/>
+        <text class="bt" x="1057" y="208">Lambda lanzadora</text>
+        <text class="bs" x="1057" y="226">chats y tareas · STS · firma</text>
+        <rect class="box work" x="590" y="440" width="230" height="80" rx="8"/>
+        <text class="bt" x="602" y="462">DynamoDB (2 tablas)</text>
+        <text class="bs" x="602" y="480">chats · ejecuciones · eventos · OBO</text>
+        <text class="bs" x="602" y="496">tareas · USAGE · catálogo · auditoría</text>
+        <rect class="box work" x="845" y="440" width="125" height="80" rx="8"/>
+        <text class="bt" x="857" y="462">Lambdas Streams</text>
+        <text class="bs" x="857" y="480">contadores (€)</text>
+        <text class="bs" x="857" y="496">cierre (fin)</text>
+        <rect class="box core" x="590" y="600" width="415" height="185" rx="8"/>
+        <text class="bt" x="602" y="622">AgentCore Runtime V2 · kernel (Python, Strands)</text>
+        <text class="bs" x="602" y="640">1 microVM por ejecución · sin token del usuario</text>
+        <text class="bs" x="602" y="656">credenciales STS de la sesión (modelos del agente)</text>
+        <text class="bs" x="602" y="672">modelos → Bedrock directo (VPC endpoints)</text>
+        <text class="bs" x="602" y="688">herramientas → MCP Hub (PrivateLink)</text>
+        <text class="bs" x="602" y="704">eventos y uso → DynamoDB · espacio del chat ↔ S3</text>
+        <text class="mono" x="602" y="720">código: local (shell) o Code Interpreter</text>
+        <rect class="box work" x="1085" y="600" width="160" height="190" rx="8"/>
+        <text class="bt" x="1097" y="622">MCP Hub</text>
+        <text class="bs" x="1097" y="640">TypeScript · Fargate</text>
+        <text class="bs" x="1097" y="656">PrivateLink (NLB)</text>
+        <text class="bs" x="1097" y="672">token de ejecución</text>
+        <text class="bs" x="1097" y="688">allow · aprobaciones</text>
+        <text class="bs" x="1097" y="704">pide OBO al backend</text>
+        <text class="bs" x="1097" y="720">auditoría</text>
+        <text class="bs" x="1097" y="736">falla cerrado</text>
+        <rect class="box work" x="1270" y="600" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="622">mcp-documentos</text>
+        <text class="bs" x="1282" y="640">buscar_documentos · filtros obligatorios por agente y grupos</text>
+        <rect class="box work" x="1270" y="650" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="672">mcp-hora</text>
+        <text class="bs" x="1282" y="690">hora_actual · eco · quien_soy (prueba del OBO)</text>
+        <rect class="box work" x="1270" y="700" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="722">mcp-auditoria</text>
+        <text class="bs" x="1282" y="740">registrar_incidencia · oculta al modelo · la llama el kernel</text>
+        <rect class="box work" x="1270" y="750" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="772">Otros MCP</text>
+        <text class="bs" x="1282" y="790">propios o externos → APIs de la red corporativa</text>
+        <rect class="box work" x="1280" y="100" width="205" height="56" rx="8"/>
+        <text class="bt" x="1292" y="122">SQS FIFO</text>
+        <text class="bs" x="1292" y="140">toda ejecución: chats y tareas</text>
+        <rect class="box work" x="1505" y="100" width="210" height="56" rx="8"/>
+        <text class="bt" x="1517" y="122">EventBridge Scheduler</text>
+        <text class="bs" x="1517" y="140">un horario por tarea</text>
+        <rect class="box work" x="1280" y="176" width="205" height="56" rx="8"/>
+        <text class="bt" x="1292" y="198">KMS</text>
+        <text class="bs" x="1292" y="216">claves propias (CMK)</text>
+        <rect class="box work" x="1505" y="176" width="210" height="56" rx="8"/>
+        <text class="bt" x="1517" y="198">CloudWatch</text>
+        <text class="bs" x="1517" y="216">logs · trazas · métricas</text>
+        <rect class="box work" x="1280" y="252" width="435" height="56" rx="8"/>
+        <text class="bt" x="1292" y="274">Secrets Manager</text>
+        <text class="bs" x="1292" y="292">secreto de Entra (OBO) · credenciales de los MCP</text>
+        <rect class="box work" x="1280" y="430" width="125" height="90" rx="8"/>
+        <text class="bt" x="1292" y="452">S3</text>
+        <text class="bs" x="1292" y="470">espacios de</text>
+        <text class="bs" x="1292" y="486">chat · skills</text>
+        <text class="bs" x="1292" y="502">documentos</text>
+        <rect class="box br" x="1425" y="430" width="135" height="90" rx="8"/>
+        <text class="bt" x="1437" y="452">Bedrock</text>
+        <text class="bs" x="1437" y="470">Claude,</text>
+        <text class="bs" x="1437" y="486">GPT-6.1 Sol…</text>
+        <text class="bs" x="1437" y="502">directo</text>
+        <rect class="box br" x="1580" y="430" width="135" height="90" rx="8"/>
+        <text class="bt" x="1592" y="452">Knowledge</text>
+        <text class="bs" x="1592" y="470">Bases (RAG)</text>
+        <text class="bs" x="1592" y="486">filtros por</text>
+        <text class="bs" x="1592" y="502">agente y grupo</text>
+        <rect class="box core" x="265" y="900" width="210" height="130" rx="8"/>
+        <text class="bt" x="277" y="922">AgentCore Memory</text>
+        <text class="bs" x="277" y="940">actorId = oid · sesión = chat</text>
+        <text class="bs" x="277" y="956">conversación del agente</text>
+        <text class="bs" x="277" y="972">preferencias y hechos</text>
+        <text class="bs" x="277" y="988">borrado a petición</text>
+        <rect class="box core" x="505" y="900" width="290" height="130" rx="8"/>
+        <text class="bt" x="517" y="922">Code Interpreter</text>
+        <text class="bs" x="517" y="940">solo agentes en ese modo</text>
+        <text class="bs" x="517" y="956">VPC propia sin DNS</text>
+        <text class="bs" x="517" y="972">sin red ni credenciales</text>
+        <text class="bs" x="517" y="988">ficheros por la API</text>
+        <rect class="box core" x="265" y="1065" width="760" height="90" rx="8"/>
+        <text class="bt" x="277" y="1087">AgentCore Evaluations</text>
+        <text class="bs" x="277" y="1105">lee las trazas OTEL del kernel en CloudWatch · online: % de sesiones reales</text>
+        <text class="bs" x="277" y="1121">batch desde el panel antes de publicar una versión · notas por agente y versión</text>
+        <path class="wire" d="M115,190 V217" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="115" cy="204" r="11"/><text x="115" y="204">1</text></g>
+        <path class="wire" d="M210,140 H257" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="235" cy="126" r="11"/><text x="235" y="126">2</text></g>
+        <g class="badge"><circle cx="235" cy="162" r="11"/><text x="235" y="162">10</text></g>
+        <path class="wire dash" d="M375,200 V227" marker-end="url(#arr)"/>
+        <path class="wire dash" d="M260,262 H213" marker-end="url(#arr)"/>
+        <text class="wl" x="216" y="256">JWKS</text>
+        <path class="wire" d="M490,122 H587" marker-end="url(#arr)"/>
+        <text class="wl" x="500" y="114">PrivateLink</text>
+        <g class="badge"><circle cx="540" cy="146" r="11"/><text x="540" y="146">3</text></g>
+        <path class="wire" d="M790,135 H812" marker-end="url(#arr)"/>
+        <path class="wire" d="M115,390 V407" marker-end="url(#arr)"/>
+        <path class="wire" d="M210,437 H257" marker-end="url(#arr)"/>
+        <path class="wire" d="M490,442 H530 V140 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M690,160 V177" marker-end="url(#arr)"/>
+        <path class="wire" d="M590,150 H575 V345 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M575,275 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M685,370 V437" marker-end="url(#arr)"/>
+        <path class="wire dash" d="M1045,138 H1030 V425 H832 V470 H823" marker-end="url(#arr)"/>
+        <path class="wire dash" d="M905,437 V263" marker-end="url(#arr)"/>
+        <text class="wl" x="913" y="372">push</text>
+        <g class="badge"><circle cx="905" cy="330" r="11"/><text x="905" y="330">11</text></g>
+        <path class="wire dash" d="M1045,214 H1013" marker-end="url(#arr)"/>
+        <path class="wire" d="M818,260 V437" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="818" cy="350" r="11"/><text x="818" y="350">4</text></g>
+        <path class="wire" d="M820,468 H842" marker-end="url(#arr)"/>
+        <path class="wire" d="M845,495 H823" marker-end="url(#arr)"/>
+        <path class="wire" d="M900,110 V90 H1380 V97" marker-end="url(#arr)"/>
+        <text class="wl" x="1000" y="66">encola la ejecución</text>
+        <path class="wire" d="M1505,128 H1488" marker-end="url(#arr)"/>
+        <path class="wire" d="M1280,128 H1262 V214 H1228" marker-end="url(#arr)"/>
+        <path class="wire" d="M1135,242 V544 H1000 V597" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1135" cy="400" r="11"/><text x="1135" y="400">5</text></g>
+        <text class="wl" x="1143" y="470">InvokeAgentRuntime</text>
+        <path class="wire dash" d="M1200,597 V250 H1013" marker-end="url(#arr)"/>
+        <text class="wl" x="1208" y="420">token OBO</text>
+        <path class="wire" d="M660,597 V523" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="660" cy="560" r="11"/><text x="660" y="560">9</text></g>
+        <path class="wire" d="M1005,615 H1048 V556 H1490 V523" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1440" cy="556" r="11"/><text x="1440" y="556">6</text></g>
+        <path class="wire" d="M1342,556 V523" marker-end="url(#arr)"/>
+        <path class="wire" d="M1005,700 H1082" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1040" cy="700" r="11"/><text x="1040" y="700">7</text></g>
+        <path class="wire" d="M1245,622 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1245,672 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1245,722 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1245,772 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1600,600 V523" marker-end="url(#arr)"/>
+        <path class="wire" d="M840,110 V70 H550 V588 H213" marker-end="url(#arr)"/>
+        <text class="wl" x="530" y="612" text-anchor="end">salida a internet por Netskope</text>
+        <g class="badge"><circle cx="550" cy="500" r="11"/><text x="550" y="500">12</text></g>
+        <path class="wire" d="M115,615 V637" marker-end="url(#arr)"/>
+        <path class="wire" d="M20,588 H8 V262 H17" marker-end="url(#arr)"/>
+        <path class="wire" d="M590,740 H360 V897" marker-end="url(#arr)"/>
+        <text class="wl" x="370" y="732">memoria</text>
+        <path class="wire" d="M630,785 V897" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="630" cy="840" r="11"/><text x="630" y="840">8</text></g>
+      </svg>

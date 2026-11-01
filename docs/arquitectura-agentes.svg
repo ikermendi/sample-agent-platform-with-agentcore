@@ -154,9 +154,8 @@
         <text class="bs" x="1292" y="502">documentos</text>
         <rect class="box br" x="1425" y="430" width="135" height="90" rx="8"/>
         <text class="bt" x="1437" y="452">Bedrock</text>
-        <text class="bs" x="1437" y="470">Claude,</text>
-        <text class="bs" x="1437" y="486">GPT-6.1 Sol…</text>
-        <text class="bs" x="1437" y="502">directo</text>
+        <text class="bs" x="1437" y="470">Claude</text>
+        <text class="bs" x="1437" y="486">directo</text>
         <rect class="box br" x="1580" y="430" width="135" height="90" rx="8"/>
         <text class="bt" x="1592" y="452">Knowledge</text>
         <text class="bs" x="1592" y="470">Bases (RAG)</text>

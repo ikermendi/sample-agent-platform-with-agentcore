@@ -65,8 +65,8 @@
         <rect class="box idmz" x="260" y="95" width="230" height="105" rx="8"/>
         <text class="bt" x="272" y="117">API Gateway REST</text>
         <text class="bs" x="272" y="135">response streaming (SSE)</text>
-        <text class="bs" x="272" y="151">WAF · cuotas por cliente</text>
-        <text class="mono" x="272" y="167">/chats /runs /agents /me/*</text>
+        <text class="bs" x="272" y="151">WAF · ritmo por IP</text>
+        <text class="mono" x="272" y="167">/v1/chats /runs /agents /me/*</text>
         <rect class="box idmz" x="260" y="230" width="230" height="70" rx="8"/>
         <text class="bt" x="272" y="252">Autorizador Lambda</text>
         <text class="bs" x="272" y="270">valida el JWT de Entra</text>

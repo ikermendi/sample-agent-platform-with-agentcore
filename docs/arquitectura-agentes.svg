@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
         <title id="dg-title">Diagrama de la arquitectura</title>
-        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api y las Lambdas vigilante y lanzadora; las Lambdas de contadores y cierre, dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS FIFO por la que entra toda ejecución (el backend encola los chats y Scheduler las tareas; la lanzadora las arranca), la VPC de agentes con el kernel en AgentCore Runtime V2, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora, mcp-auditoria y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Memory, Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
+        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api y las Lambdas vigilante y lanzadora; las Lambdas de contadores y cierre, dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS FIFO por la que entra toda ejecución (el backend encola los chats y Scheduler las tareas; la lanzadora las arranca), la VPC de agentes con el kernel en AgentCore Runtime V2, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Memory, Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
         <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;font-family:var(--font-sans);background:#fff}
 .frame { fill: none; stroke-width: 1.5; }
 .frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
@@ -35,9 +35,9 @@
         <text class="frame-label work" x="554" y="62">Cuenta de la plataforma · us-east-1</text>
         <rect class="frame vpc" x="565" y="80" width="685" height="320" rx="10"/>
         <text class="frame-label work" x="579" y="102" style="font-size:10.5px">VPC de servicios · sin IGW · VPC endpoints</text>
-        <rect class="frame engine" x="565" y="565" width="460" height="240" rx="10"/>
+        <rect class="frame engine" x="565" y="565" width="460" height="200" rx="10"/>
         <text class="frame-label core" x="579" y="587" style="font-size:10.5px">VPC de agentes · sin rutas · DNS Firewall</text>
-        <rect class="frame vpc" x="1060" y="565" width="655" height="240" rx="10"/>
+        <rect class="frame vpc" x="1060" y="565" width="655" height="200" rx="10"/>
         <text class="frame-label work" x="1074" y="587" style="font-size:10.5px">VPC de integraciones MCP · → red corporativa (TGW / DX / VPN)</text>
         <text class="frame-label work" x="1280" y="62" style="font-size:10.5px">Servicios regionales</text>
         <rect class="frame core" x="240" y="860" width="790" height="320" rx="10"/>
@@ -107,23 +107,22 @@
         <text class="bt" x="857" y="462">Lambdas Streams</text>
         <text class="bs" x="857" y="480">contadores (€)</text>
         <text class="bs" x="857" y="496">cierre (fin)</text>
-        <rect class="box core" x="590" y="600" width="415" height="185" rx="8"/>
-        <text class="bt" x="602" y="622">AgentCore Runtime V2 · kernel (Python, Strands)</text>
-        <text class="bs" x="602" y="640">1 microVM por ejecución · sin token del usuario</text>
-        <text class="bs" x="602" y="656">credenciales STS de la sesión (modelos del agente)</text>
-        <text class="bs" x="602" y="672">modelos → Bedrock directo (VPC endpoints)</text>
-        <text class="bs" x="602" y="688">herramientas → MCP Hub (PrivateLink)</text>
-        <text class="bs" x="602" y="704">eventos y uso → DynamoDB · espacio del chat ↔ S3</text>
-        <text class="mono" x="602" y="720">código: local (shell) o Code Interpreter</text>
-        <rect class="box work" x="1085" y="600" width="160" height="190" rx="8"/>
+        <rect class="box core" x="590" y="598" width="415" height="160" rx="8"/>
+        <text class="bt" x="602" y="620">AgentCore Runtime V2 · kernel (Python, Strands)</text>
+        <text class="bs" x="602" y="638">1 microVM por ejecución · sin token del usuario</text>
+        <text class="bs" x="602" y="654">credenciales STS de la sesión (modelos del agente)</text>
+        <text class="bs" x="602" y="670">modelos → Bedrock directo (VPC endpoints)</text>
+        <text class="bs" x="602" y="686">herramientas → MCP Hub (PrivateLink)</text>
+        <text class="bs" x="602" y="702">eventos y uso → DynamoDB · espacio del chat ↔ S3</text>
+        <text class="mono" x="602" y="718">código: local (shell) o Code Interpreter</text>
+        <rect class="box work" x="1085" y="600" width="160" height="150" rx="8"/>
         <text class="bt" x="1097" y="622">MCP Hub</text>
         <text class="bs" x="1097" y="640">TypeScript · Fargate</text>
         <text class="bs" x="1097" y="656">PrivateLink (NLB)</text>
         <text class="bs" x="1097" y="672">token de ejecución</text>
         <text class="bs" x="1097" y="688">allow · aprobaciones</text>
         <text class="bs" x="1097" y="704">pide OBO al backend</text>
-        <text class="bs" x="1097" y="720">auditoría</text>
-        <text class="bs" x="1097" y="736">falla cerrado</text>
+        <text class="bs" x="1097" y="720">auditoría · falla cerrado</text>
         <rect class="box work" x="1270" y="600" width="445" height="44" rx="8"/>
         <text class="bt" x="1282" y="622">mcp-documentos</text>
         <text class="bs" x="1282" y="640">buscar_documentos · filtros obligatorios por agente y grupos</text>
@@ -131,11 +130,8 @@
         <text class="bt" x="1282" y="672">mcp-hora</text>
         <text class="bs" x="1282" y="690">hora_actual · eco · quien_soy (prueba del OBO)</text>
         <rect class="box work" x="1270" y="700" width="445" height="44" rx="8"/>
-        <text class="bt" x="1282" y="722">mcp-auditoria</text>
-        <text class="bs" x="1282" y="740">registrar_incidencia · oculta al modelo · la llama el kernel</text>
-        <rect class="box work" x="1270" y="750" width="445" height="44" rx="8"/>
-        <text class="bt" x="1282" y="772">Otros MCP</text>
-        <text class="bs" x="1282" y="790">propios o externos → APIs de la red corporativa</text>
+        <text class="bt" x="1282" y="722">Otros MCP</text>
+        <text class="bs" x="1282" y="740">propios o externos → APIs de la red corporativa</text>
         <rect class="box work" x="1280" y="100" width="205" height="56" rx="8"/>
         <text class="bt" x="1292" y="122">SQS FIFO</text>
         <text class="bs" x="1292" y="140">toda ejecución: chats y tareas</text>
@@ -229,7 +225,6 @@
         <path class="wire" d="M1245,622 H1267" marker-end="url(#arr)"/>
         <path class="wire" d="M1245,672 H1267" marker-end="url(#arr)"/>
         <path class="wire" d="M1245,722 H1267" marker-end="url(#arr)"/>
-        <path class="wire" d="M1245,772 H1267" marker-end="url(#arr)"/>
         <path class="wire" d="M1600,600 V523" marker-end="url(#arr)"/>
         <path class="wire" d="M840,110 V70 H550 V588 H213" marker-end="url(#arr)"/>
         <text class="wl" x="530" y="612" text-anchor="end">salida a internet por Netskope</text>

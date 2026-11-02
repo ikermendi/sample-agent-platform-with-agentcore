@@ -122,3 +122,19 @@ def test_registrar_herramienta_a_mitad_de_ejecucion():
     assert "generar_grafico" not in m.llamadas[0]["herramientas"]
     assert "generar_grafico" in m.llamadas[1]["herramientas"]
     assert any("grafico.png" in str(msg) for msg in a.messages)
+
+
+def test_cancel_del_principal_para_al_subagente():
+    import threading
+    sub_model = FakeModel([herramienta("lenta_a")] * 20 + [texto("informe")])
+    sub = Agent(model=sub_model, name="revisor", description="Revisa", tools=[lenta_a], callback_handler=None)
+    prin = Agent(model=FakeModel([herramienta("revisor", {"input": "x"}), texto("fin")]),
+                 tools=[sub.as_tool()], callback_handler=None)
+    def cancelar():
+        while len(sub_model.llamadas) < 2:
+            threading.Event().wait(0.02)
+        prin.cancel()
+    threading.Thread(target=cancelar).start()
+    r = prin("empieza")
+    print("principal:", r.stop_reason, "| llamadas del subagente:", len(sub_model.llamadas))
+    assert r.stop_reason == "cancelled" and len(sub_model.llamadas) < 5

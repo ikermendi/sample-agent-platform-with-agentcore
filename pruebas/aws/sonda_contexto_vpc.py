@@ -170,6 +170,14 @@ def medir(cred, region, bucket, prefijo):
     a2("¿Sigues ahí?")
     R["restaurar50"] = {"montar_s": round(t_montar, 3), "montar_s3": c2.desde(0), "mensajes": len(a2.messages),
                         "primer_turno_s": round(time.monotonic() - t1, 2), "primer_turno_s3": c2.desde(i)}
+    # 5. Montarlo otra vez saltando el backfill del stash, como hará el kernel (ver pruebas/kernel/t_backfill.py)
+    ses3 = sesion(cred, region)
+    c3 = Contador(ses3)
+    a3 = agente(ses3, bucket, prefijo, chat, [texto("Sigo aquí.")])
+    a3.context_manager._backfill_done = True
+    i, t1 = len(c3.ops), time.monotonic()
+    a3("¿Y ahora?")
+    R["sin_backfill"] = {"primer_turno_s": round(time.monotonic() - t1, 2), "primer_turno_s3": c3.desde(i)}
     return R
 '''
 
@@ -305,8 +313,12 @@ def resumen(nombre, R):
     print(f"     crear 50 turnos: {c50['s']} s · {c50['s3']}")
     print(f"     restaurar 50 turnos: montar {r50['montar_s']} s {r50['montar_s3']} · primer turno {r50['primer_turno_s']} s "
           f"· {r50['primer_turno_s3']}", flush=True)
+    sb = R["sin_backfill"]
+    print(f"     restaurar sin backfill: primer turno {sb['primer_turno_s']} s · {sb['primer_turno_s3']}", flush=True)
     return {"put_p50": b["put_p50"], "get_p50": b["get_p50"], "s3_turno_ms": statistics.median(s3_t),
-            "get_restaurar": g.get("n", 0), "restaurar_s": r50["primer_turno_s"], "montar_s": r50["montar_s"]}
+            "get_restaurar": g.get("n", 0), "restaurar_s": r50["primer_turno_s"], "montar_s": r50["montar_s"],
+            "get_sin_backfill": sb["primer_turno_s3"].get("GetObject", {}).get("n", 0),
+            "sin_backfill_s": sb["primer_turno_s"]}
 
 
 def principal():
@@ -349,6 +361,10 @@ def principal():
     anota("4. Dentro: restaurar 50 turnos añade menos de 3 s a la primera llamada", dentro["restaurar_s"] < 3,
           f"{dentro['get_restaurar']} GET; primer turno {dentro['restaurar_s']} s (fuera {fuera['restaurar_s']} s); "
           f"montar {dentro['montar_s']} s")
+    anota("5. Dentro: saltando el backfill, restaurar 50 turnos añade menos de 3 s",
+          dentro["get_sin_backfill"] == 0 and dentro["sin_backfill_s"] < 3,
+          f"{dentro['get_sin_backfill']} GET; primer turno {dentro['sin_backfill_s']} s "
+          f"(con backfill {dentro['restaurar_s']} s); fuera {fuera['get_sin_backfill']} GET, {fuera['sin_backfill_s']} s")
 
 
 def borrar():

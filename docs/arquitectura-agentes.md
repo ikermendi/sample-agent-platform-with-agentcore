@@ -107,19 +107,21 @@ sequenceDiagram
 
   App->>GW: POST /chats/{id}/runs (run_id generado por la app)
   GW->>API: PrivateLink · JWT validado (api lee oid y grupos)
-  API->>D: ejecución pendiente · ejecucion_activa · OBO
+  API->>D: ejecución pendiente · ejecucion_activa · tokens OBO que falten (pedidos a Entra con jwt-bearer)
   API->>API: credenciales STS (AssumeRole con etiquetas) · token de ejecución (kms:Sign)
   API->>K: InvokeAgentRuntime (sesión del chat · STS · token de ejecución)
   K-->>API: aceptada (sigue en segundo plano)
   API-->>App: 202 run_id
   App->>GW: GET /runs/{id}/events (SSE)
+  GW->>API: PrivateLink (stream)
   loop bucle del agente
     K->>B: modelo (VPC endpoint, credenciales STS)
     B-->>L: registro de invocación (identity.arn con el run_id, tokens) por CloudWatch Logs
     L->>D: coste en USAGE, en el chat y en COSTE del run_id
     K->>H: herramienta (token de ejecución · allow · aprobaciones · OBO)
+    H->>API: /internal/obo (solo si la herramienta va con OBO)
     K->>D: eventos · uso · latido
-    API->>D: consulta los eventos nuevos (300 ms, hasta 1 s en los silencios)
+    API->>D: consulta los eventos nuevos (300 ms, hasta 1 s en los silencios, 5 s con una aprobación pendiente)
     API-->>App: SSE
     opt el usuario pulsa "parar"
       App->>GW: POST /runs/{id}/cancel
@@ -147,7 +149,7 @@ sequenceDiagram
 8. **Skills, código y ficheros.** Los scripts de skills corren en el kernel como herramientas tipadas; el código del modelo, en la microVM (modo local) o en Code Interpreter; el kernel sincroniza el espacio del chat con S3 y emite `fichero` por cada fichero nuevo. [El agente en ejecución](#agente).
 9. **Eventos y coste.** El kernel escribe en DynamoDB, bajo su ejecución, el texto (cada ~250 ms), las herramientas, los ficheros, el uso de tokens (solo para enseñarlo en la app) y un latido cada 30 s. El coste que cuenta lo saca la Lambda de coste del registro de invocaciones de Bedrock, unos segundos después de cada llamada al modelo.
 10. **Lectura en la app.** `GET /runs/{id}/events` (SSE) en cualquier réplica: el backend consulta los eventos nuevos de esa ejecución en DynamoDB por conexión abierta (una consulta por clave, barata) con dos ritmos: 300 ms mientras llegan eventos y 1 s en los silencios (5 s durante una aprobación pendiente), volviendo a 300 ms en cuanto llega algo; el streaming de texto no lo nota y se ahorra alrededor de la mitad de las consultas. Si no hay nada que enviar, `api` manda un comentario SSE de latido cada ≤60 s, porque API Gateway corta un stream tras 5 minutos sin datos y el NLB tras 350 s sin tráfico (fijo con listener TLS); y como un stream dura como mucho 15 minutos, la app reconecta con `Last-Event-ID` antes de llegar a ellos, o en cuanto se corta; `POST /runs/{id}/cancel` para parar; ficheros con URL prefirmada.
-11. **Fin.** El kernel escribe `fin` (con su motivo y el uso que midió, solo informativo). La Lambda de Streams, al verlo, llama a `cerrar(run_id)`: guarda el mensaje consolidado en el chat, borra `ejecucion_activa` (salen los mensajes en cola de la app) y avisa al backend. Si el siguiente mensaje de la app llega antes (la app ve `fin` por el SSE en 300 ms; Streams tarda alrededor de 1 s), `api` cierra él mismo en vez de responder 409. [Ciclo de vida](#ciclo).
+11. **Fin.** El kernel escribe `fin` (con su motivo y el uso que midió, solo informativo). La Lambda de Streams, al verlo, llama a `cerrar(run_id)`: guarda el mensaje consolidado en el chat, borra `ejecucion_activa` (desde ahí el backend acepta el siguiente mensaje) y avisa al backend. Si el siguiente mensaje de la app llega antes (la app ve `fin` por el SSE en 300 ms; Streams tarda alrededor de 1 s), `api` cierra él mismo en vez de responder 409. [Ciclo de vida](#ciclo).
 12. **App en segundo plano.** El backend envía la notificación por APNs o Web Push (salida por Netskope). Los chats no visibles se actualizan con `GET /chats?updated_since=…`.
 
 <a id="cuentas"></a>
@@ -206,7 +208,7 @@ Una sola app Expo para iOS y web (react-native-web) con la interfaz de chat de `
 
 - **Lista de chats** en un menú lateral: búsqueda, renombrar, archivar y borrar. El título lo propone el backend con un modelo barato tras el primer mensaje.
 - **Conversación en streaming**: texto en Markdown, tarjetas para lo que hace el agente ("Buscando en documentos…", "Ejecutando código…", "Generando el informe…") y el razonamiento plegado si el modelo lo da.
-- **Encolar mensajes**: mientras el agente trabaja, el usuario puede seguir escribiendo. Los mensajes quedan en una cola en la app, visibles en la caja de texto, donde se pueden reordenar o quitar, y se envían en orden cuando termina la ejecución. La cola la guarda en la caché local nuestro código (`createMessageQueue` de assistant-ui solo la tiene en memoria) y se vuelve a encolar al abrir el chat, así que sobrevive a cerrar la app.
+- **Encolar mensajes**: mientras el agente trabaja, el usuario puede seguir escribiendo. Los mensajes quedan en una cola en la app, visibles en la caja de texto, donde se pueden reordenar o quitar, y se envían en orden cuando la app ve `fin` por el SSE; si el usuario para la ejecución, lo encolado se queda hasta su siguiente envío. La cola la guarda en la caché local nuestro código (`createMessageQueue` de assistant-ui solo la tiene en memoria) y se vuelve a encolar al abrir el chat, así que sobrevive a cerrar la app.
 - **Cancelar** con el botón de parar (marca de cancelación en el backend); **reintentar** y **copiar** en cada respuesta.
 - **Contexto del chat**: un indicador pequeño junto a la caja de texto con lo que ocupa la conversación en la ventana del modelo ("34 %"); al pulsarlo, el reparto: instrucciones y memoria, herramientas, conversación y resultados de herramientas. Avisa cuando se acerca al límite y el agente va a empezar a recortar o resumir, para que el usuario sepa por qué el agente "olvida" lo de hace mucho y pueda abrir un chat nuevo. Sale del evento `contexto` del SSE; al reabrir un chat, del último guardado en el mensaje consolidado.
 - **Seguir más tarde**: si la app pasa a segundo plano la ejecución continúa; al volver, la app reconecta el SSE con `Last-Event-ID` y recupera lo que falte. El SSE se lee con el `fetch` de `expo/fetch`, que Expo instala como `fetch` global en nativo y que entrega el cuerpo en streaming (el de React Native no); la app parsea los eventos y envía ella misma `Last-Event-ID` al reconectar. Si una tarea larga termina con la app cerrada, llega una notificación.
@@ -271,7 +273,7 @@ El kernel escribe en DynamoDB todo lo que va haciendo el agente, no solo el text
 | `herramienta_inicio` | Nombre, etiqueta legible ("Buscando en documentos") y resumen de los argumentos | Tarjeta con indicador "en curso" |
 | `herramienta_fin` | Estado (bien o error), duración y resumen corto del resultado; en las búsquedas, las citas (título y enlace) | La tarjeta pasa a hecha o a error |
 | `skill_activada` | Qué skill se activó | Línea discreta en la tarjeta |
-| `aprobacion_pendiente` | Herramienta, resumen de los argumentos y hasta cuándo se espera | Tarjeta de aprobación con aprobar y rechazar |
+| `aprobacion_pendiente` | `approval_id`, herramienta, resumen de los argumentos y hasta cuándo se espera (`caduca`) | Tarjeta de aprobación con aprobar y rechazar |
 | `fichero` | Nombre, tipo, tamaño y referencia del fichero | Tarjeta del fichero con vista previa |
 | `estado` | "Esperando al modelo", "reintentando", "esperando aprobación"… | Indicador bajo el mensaje |
 | `contexto` | Antes de cada llamada al modelo: tokens estimados por partes (instrucciones y memoria, definiciones de herramientas, conversación, resultados de herramientas), el total y el porcentaje de la ventana del modelo; si hubo recorte o resumen, cuánto | Indicador de contexto del chat y su reparto |
@@ -390,6 +392,7 @@ sequenceDiagram
   participant H as MCP Hub
 
   L->>K: InvokeAgentRuntime (carga: mensaje y adjuntos nuevos, versión del agente, límite, credenciales STS, token de ejecución, anterior_interrumpida si hace falta)
+  K->>K: guarda: firma del token de ejecución (clave pública de KMS) y su run_id igual al de la carga · run_id ya aceptado: lo ignora · otra ejecución en curso: espera a que termine su limpieza
   K->>D: estado = en_marcha (condicional desde pendiente)
   K-->>L: aceptada (la ejecución sigue en una tarea lanzada con asyncio.create_task y registrada con @app.async_task: /ping = HealthyBusy)
   K->>K: hilo del latido (cada 30 s) · clientes de AWS con las credenciales STS de la carga
@@ -401,15 +404,17 @@ sequenceDiagram
     K->>K: comprueba los hashes · carga SKILL.md y tools.yaml
     K->>S3: sync de espacios/{usuario}/{chat}/ (entrada/, trabajo/, salida/) a la carpeta local
     K->>S3: SnapshotSessionManager lee conversacion/ del chat (un fichero por agente · el stash, en la primera llamada al modelo)
+    K->>H: tools/list en /mcp/{nombre} de cada MCP permitido, con el token de ejecución (un MCPClient por MCP, Streamable HTTP sin sesión, con un diccionario meta del kernel para el approval_id)
+    H-->>K: solo las herramientas de la lista allow que viene en el token
   end
-  K->>S3: memoria/preferencias.md y hechos.md del usuario (un GET, y con el Agent en memoria, condicional con el ETag guardado: 304 si no cambió)
-  K->>K: memoria del usuario en el prompt · herramienta recordar
+  opt usar_memoria encendido y la versión no la apaga
+    K->>S3: memoria/preferencias.md y hechos.md del usuario (un GET, y con el Agent en memoria, condicional con el ETag guardado: 304 si no cambió)
+    K->>K: memoria del usuario en el prompt · herramienta recordar
+  end
   opt la ejecución anterior murió o se canceló
     K->>K: añade la nota "la respuesta anterior se interrumpió"
   end
-  K->>H: tools/list en /mcp/{nombre} de cada MCP permitido, con el token de ejecución (un MCPClient por MCP, Streamable HTTP sin sesión, con un diccionario meta del kernel para el approval_id)
-  H-->>K: solo las herramientas de la lista allow que viene en el token
-  K->>K: el mismo Agent, con las credenciales y el token nuevos en sus clientes · o, si no lo había, lo monta con el snapshot: modelo de la versión · herramientas del hub · plugin AgentSkills (nombre y descripción de cada skill) · subagentes como herramientas
+  K->>K: el mismo Agent, con las credenciales y el token nuevos en sus clientes · o, si no lo había, lo monta con el snapshot: modelo de la versión · herramientas del hub · plugin AgentSkills (nombre y descripción de cada skill) · subagentes como herramientas · ContextManager (recorte y Offload.summarize con su modelo y su prompt) con el stash en el mismo S3Storage que el snapshot
   K->>K: vuelve a fijar agent.system_prompt (el snapshot restaura el guardado): instrucciones de esta versión y memoria recién leída
   K->>K: HumanInTheLoop (confirmar) · intervención de comandos · Limits · SequentialToolExecutor · Sandbox (local o Code Interpreter) · hook de presupuesto
   K->>K: si lo ha montado desde S3, vuelve a registrar las herramientas de las skills ya activadas en este chat
@@ -431,10 +436,15 @@ sequenceDiagram
   participant H as MCP Hub
 
   K->>D: hook BeforeModelCallEvent: lee USAGE#35;oid#35;mes
+  K->>S3: stash: un PUT por cada bloque nuevo (texto y resultados de herramientas) en conversacion/ del chat
+  K->>K: ContextManager: recorta a una vista previa los resultados de más de 1.500 tokens
+  opt contexto al 85 % de la ventana
+    K->>B: resumen (llamada auxiliar sin caché, fuera de los hooks y los Limits, que conserva las referencias [ref: …] del stash)
+  end
   K->>K: estima el contexto por partes (count_tokens, local)
-  K->>D: evento contexto
+  K->>D: evento contexto (con lo recortado o resumido)
   alt gasto ≥ límite o Limits agotados
-    K->>D: fin (motivo limite)
+    K->>D: aviso · fin (motivo limite)
   else
     K->>B: llamada al modelo (streaming, credenciales STS)
     K->>D: texto cada ~250 ms · razonamiento · uso de tokens
@@ -453,7 +463,9 @@ sequenceDiagram
         H->>H: allow · aprobación concedida y sin usar (si confirmar) · identidad de ejecución u OBO
         H-->>K: resultado (o error de herramienta si deniega)
       else subagente
-        K->>K: otro Agent con su allow, su snapshot en conversacion/, sus hooks y su SequentialToolExecutor · consume los Limits del principal · misma frontera
+        K->>K: otro Agent con su allow, su snapshot y su stash en conversacion/ (scope propio), su ContextManager, sus hooks y su SequentialToolExecutor · consume los Limits del principal · misma frontera
+      else retrieve_context
+        K->>S3: GET del bloque guardado en el stash
       else recordar
         K->>S3: PUT memoria/… con If-Match (si 412 o 409: relee, reaplica, repite · si no existe, If-None-Match: *)
       end
@@ -592,7 +604,7 @@ stateDiagram-v2
 ```mermaid
 stateDiagram-v2
   direction LR
-  [*] --> libre : primer mensaje
+  [*] --> libre : el usuario crea el chat (o una tarea, su chat)
   libre --> ocupado : api (mensaje o tarea) pone ejecucion_activa
   ocupado --> libre : cerrar(run_id), al ver fin
   libre --> borrado : el usuario borra el chat
@@ -679,18 +691,22 @@ sequenceDiagram
   Note over K,D: la microVM muere o el kernel se cuelga del todo
   loop cada minuto
     V->>D: ejecuciones abiertas (índice por la marca abierta)
-    alt en_marcha y último latido > 2 min, o cancelar sin efecto > 2 min
-      V->>D: estado = fallida (condicional)
-      V->>AC: StopRuntimeSession de la sesión del chat (antes del fin)
+    alt en_marcha sin latido > 2 min, cancelar sin efecto > 2 min o pendiente > 2 min
+      V->>D: estado = fallida (condicional al estado y al latido que vio)
+      V->>AC: StopRuntimeSession de la sesión del chat (antes del fin, y si da 409, sigue en la pasada siguiente)
       V->>V: espera ~3 s
       V->>D: fin (motivo interrumpida)
       V->>D: incidencia en auditoría, fallo de la tarea si era programada
-    else pendiente > 2 min
-      V->>D: estado = fallida (condicional)
-      V->>AC: StopRuntimeSession de la sesión del chat (antes del fin)
+    else fallida sin fin (StopRuntimeSession dio 409 en una pasada anterior)
+      V->>AC: StopRuntimeSession de nuevo
       V->>V: espera ~3 s
       V->>D: fin (motivo interrumpida)
-      V->>D: incidencia en auditoría, fallo de la tarea si era programada
+    else fin hace más de 5 min y sigue abierta (respaldo del cierre)
+      V->>D: cerrar(run_id)
+    end
+    opt primera pasada del día 1
+      V->>D: vacía DENY#35; (condicional a su versión)
+      Note over V: PutRolePolicy con la denegación vacía en el rol de sesión
     end
   end
   D->>C: Streams (fin)
@@ -707,7 +723,7 @@ sequenceDiagram
 - **Lo que hace cada minuto**: busca las ejecuciones abiertas (índice disperso por la marca `abierta`, que pone `api` al crear la ejecución y quita `cerrar(run_id)`; así contiene las `pendiente`, las `en_marcha` y las que tienen `fin` pero nadie ha cerrado) y da por muertas: las `en_marcha` con más de 2 minutos sin latido (unos 4 perdidos) o con `cancelar` puesto desde hace más de 2 minutos sin efecto; y las `pendiente` con más de 2 minutos desde su creación (`api` murió entre crearla e invocar, el kernel murió al arrancar o nunca llegó a escribir `en_marcha`; un arranque normal tarda unos segundos); y las `fallida` sin `fin`, de una pasada anterior en la que `StopRuntimeSession` respondió 409. No mira la duración: el tope de una hora ya lo impone el propio kernel (para a los 55 minutos) y, pasada la hora, se queda sin credenciales STS. Con cada una:
   - la pasa a `fallida` con una escritura condicional (solo si sigue en el estado que vio y su latido no ha cambiado): si el kernel termina justo a la vez, gana el kernel;
   - llama a `StopRuntimeSession` con la sesión del chat (API de AgentCore) para matar la microVM si sigue viva: el corte duro, sin limpieza. Va **antes** del `fin`, porque la sesión es la del chat: si fuera después, `cerrar(run_id)` podría haber liberado ya el chat y la siguiente ejecución estaría corriendo en esa misma sesión; y así un kernel colgado que vuelve no puede escribir el snapshot encima del turno siguiente. Un 404 (la sesión ya no existe) vale; un 409 se reintenta en la pasada siguiente sin escribir el `fin`. Después espera unos 3 s antes del `fin`: `StopRuntimeSession` vuelve antes de que la microVM muera, y una invocación nueva al mismo id que llega en los primeros ~100 ms todavía entra en la vieja y se pierde sin error, mientras que a partir de 500 ms ya cae en una microVM nueva (comprobado con la sonda 9; entre 100 y 500 ms no se midió); si el chat se liberara en ese hueco, el mensaje siguiente desaparecería. Si aun así se pierde una, nunca llega a `en_marcha` y la vigilante la cierra a los 2 minutos en `pendiente`, como cualquier arranque fallido;
-  - escribe el evento `fin` (`motivo = interrumpida`, "la ejecución se ha interrumpido"); `fin` es el evento `EVT#999999` de la ejecución (así entra en el rango que lee el SSE) con el TTL de la ejecución, no el de 48 h, y se escribe con `attribute_not_exists`, así que solo hay uno aunque el kernel vuelva tarde; la app lo muestra con un botón para reintentar y la Lambda de Streams, al verlo, llama a `cerrar(run_id)`, que borra `ejecucion_activa` del chat (salen los mensajes en cola y deja de haber 409) y consolida lo que haya;
+  - escribe el evento `fin` (`motivo = interrumpida`, "la ejecución se ha interrumpido"); `fin` es el evento `EVT#999999` de la ejecución (así entra en el rango que lee el SSE) con el TTL de la ejecución, no el de 48 h, y se escribe con `attribute_not_exists`, así que solo hay uno aunque el kernel vuelva tarde; la app lo muestra con un botón para reintentar y la Lambda de Streams, al verlo, llama a `cerrar(run_id)`, que borra `ejecucion_activa` del chat (deja de haber 409 y la app puede enviar lo que tenga en cola) y consolida lo que haya;
   - si es una tarea programada, suma un fallo (varios seguidos la pausan y avisan al usuario);
   - lo registra en la tabla de auditoría bajo `AUDIT#plataforma#{agente}`.
 - **Respaldo del cierre**: en la misma pasada, a toda ejecución abierta que tenga `fin` desde hace más de 5 minutos le aplica `cerrar(run_id)`. Normalmente no encuentra ninguna: la Lambda de Streams cierra en un segundo. Las encuentra si el stream se atasca o un lote con un registro envenenado se descartó tras agotar sus reintentos (ver "Las Lambdas"); sin este respaldo, ese `fin` no se cerraría nunca salvo leyendo el destino de fallos, que sería otra Lambda. Como `cerrar` es idempotente por pasos, llegar tarde o a la vez que Streams no hace daño.
@@ -961,9 +977,13 @@ sequenceDiagram
     App->>API: rechazo
     API->>D: aprobación rechazada
     K->>K: la herramienta se deniega con motivo, el modelo sigue sin ella
+  else ve cancelar durante la espera
+    K->>K: el ask devuelve una denegación (no una excepción): la herramienta no corre
+    K->>D: estado cancelada + fin (motivo cancelado)
   else caduca (10 min)
     K->>D: aprobación caducada
-    K->>D: fin (motivo aprobacion_caducada)
+    K->>K: la herramienta se deniega y el modelo cierra la respuesta sin ella
+    K->>D: estado terminada + fin (motivo aprobacion_caducada)
   end
   Note over App,M: sin aprobación el hub deniega aunque el kernel lo pida: el control real está aquí
 ```
@@ -1031,7 +1051,7 @@ Lo que puede hacer un agente si alguien ejecuta código en su microVM. El objeti
 - **El backend siembra una vez**: al crear una ejecución, para cada MCP con OBO que el agente tiene permitido y del que no haya refresh token guardado (o esté marcado como rechazado), hace el OBO con Entra (`jwt-bearer`, `requested_token_use = on_behalf_of`) pidiendo también `offline_access` para que Entra devuelva un refresh token, y guarda el token de acceso y el refresh token cifrados con KMS en la tabla de OBO de DynamoDB (`OBO#{oid}#{audiencia}`, TTL de 90 días), que solo alcanza `api`. Lo normal es que ocurra en el primer mensaje con ese agente; a partir de ahí todo va por la renovación bajo demanda, un solo camino.
 - **El backend renueva bajo demanda**: una ruta interna (`POST /internal/obo`) recibe el token de ejecución y la audiencia; comprueba la firma y que esa audiencia es un MCP permitido para esa versión del agente, y devuelve el token de ese usuario. Si ha caducado (o le quedan menos de 5 minutos), pide uno nuevo con el refresh token (`grant_type=refresh_token`), guarda los nuevos (Entra da un refresh token nuevo con cada uso y no revoca el anterior: se guarda el nuevo y se descarta el viejo) y lo devuelve. Solo renueva cuando alguien lo usa: los tokens de usuarios sin actividad caducan solos. El backend es el único que lee y escribe el almacén y el único que habla con Entra.
 - **El hub siempre pregunta al backend**: antes de llamar a un MCP pide el token de esa audiencia con el token de ejecución de la llamada y lo guarda en memoria hasta poco antes de que caduque; una llamada al backend la primera vez por usuario y MCP y otra cada vez que caduca (más o menos una por hora). No toca DynamoDB ni KMS para los tokens, no tiene el secreto de Entra y no puede pedir el token de otro usuario: el token de ejecución lo firma `api` con KMS. Si el backend no responde o no hay token, deniega y lo registra en la auditoría.
-- **Camino de red**: un VPC endpoint de PrivateLink desde la VPC de integraciones MCP hacia el NLB interno del backend, en un puerto aparte (un NLB es de capa 4 y no filtra rutas) en el que el backend solo monta las rutas internas (`/internal/*`); el security group del endpoint solo admite al hub, y desde esa VPC no se llega al puerto de la API. Las otras llamadas internas (la Lambda de Streams y la vigilante por `/internal/push`) van al mismo puerto, pero desde dentro de la VPC de servicios, sin PrivateLink.
+- **Camino de red**: un VPC endpoint de PrivateLink desde la VPC de integraciones MCP hacia el NLB interno del backend, en un puerto aparte (un NLB es de capa 4 y no filtra rutas) en el que el backend solo monta las rutas internas (`/internal/*`); el security group del endpoint solo admite al hub, y desde esa VPC no se llega al puerto de la API. Las otras llamadas internas (las Lambdas de Streams, de coste y vigilante por `/internal/push`) van al mismo puerto, pero desde dentro de la VPC de servicios, sin PrivateLink.
 - **Sin MSAL para esto**: MSAL para Node (comprobado en su código, versión 7.1.2) no renueva tokens OBO con el refresh token; su propio código dice que el usuario tiene que volver a enviar su token cuando el de acceso caduca. MSAL para .NET sí tiene un modo de "OBO de larga duración". Por eso el backend hace las dos peticiones con una librería OAuth estándar (por ejemplo `oauth4webapi`), que son dos llamadas HTTP al endpoint de tokens de Entra.
 - **Cuánto dura**: los refresh tokens de Entra caducan, por defecto, tras unos 90 días sin usarse y se renuevan con cada uso; las tareas programadas funcionan mientras el usuario haya usado la app en ese periodo y nada haya revocado sus sesiones.
 
@@ -1065,9 +1085,10 @@ sequenceDiagram
     opt supera el límite
       C->>D: añade oid a DENY#35; (versión condicional)
       C->>IAM: PutRolePolicy: Deny Bedrock si SourceIdentity = oid
+      C->>D: incidencia AUDIT#35;plataforma#35; (corte de presupuesto)
     end
   else gasto ≥ límite
-    K->>D: fin (motivo limite)
+    K->>D: aviso · fin (motivo limite)
     Note over K,B: una sesión ya en marcha que lo intente recibe AccessDenied de IAM
   end
   A->>D: sube un límite o crea una excepción
@@ -1190,7 +1211,8 @@ sequenceDiagram
 
   S->>Q: disparo (tarea, hora programada)
   API->>Q: long polling
-  Q-->>API: mensaje (run_id = oid.hash(tarea, hora))
+  Q-->>API: mensaje (tarea, hora programada)
+  API->>API: run_id = oid.hash(tarea, hora)
   API->>D: tarea activa? usuario con acceso (grupos en USER#35;)? presupuesto?
   alt el chat de la tarea tiene una ejecución en marcha
     API->>Q: ChangeMessageVisibility (vuelve a intentarlo en 1–5 min, y tras 30 min, "disparo saltado")
@@ -1200,12 +1222,21 @@ sequenceDiagram
     alt Entra rechaza
       API->>D: tarea pausada · estado fallida + fin (error, "vuelve a iniciar sesión") · incidencia AUDIT#35;plataforma
       Note over API,D: el push lo envía cerrar(run_id) al ver ese fin, como cualquier otro
+      API->>Q: borra el mensaje
     else
-      API->>K: InvokeAgentRuntime (sesión del chat de la tarea · STS · token de ejecución)
-      K-->>API: aceptada
-      Note over API,K: ejecución normal, al terminar, cierre y push como en un chat
+      API->>K: InvokeAgentRuntime (sesión del chat de la tarea · STS · token de ejecución, con los reintentos de lanzar)
+      alt aceptada
+        K-->>API: aceptada
+        Note over API,K: ejecución normal, al terminar, cierre y push como en un chat
+        API->>Q: borra el mensaje
+      else 429 o 409 tras los reintentos
+        API->>D: deshace la ejecución (borra RUN#35; y ejecucion_activa, si sigue pendiente)
+        API->>Q: ChangeMessageVisibility (1–5 min, mismo run_id en la entrega siguiente)
+      else 402
+        API->>D: estado fallida + fin (error) · un fallo más de la tarea
+        API->>Q: borra el mensaje
+      end
     end
-    API->>Q: borra el mensaje
   end
 ```
 
@@ -1213,7 +1244,7 @@ sequenceDiagram
 
 - **Las crea el usuario en la app** con los agentes que puede usar; se ejecutan como él y cuentan en su presupuesto. Se guardan en DynamoDB (agente, instrucción, frecuencia, zona horaria, chat de la tarea, estado).
 - **Disparo**: el backend crea un horario por tarea en EventBridge Scheduler (expresión `cron`/`rate`/`at` con zona horaria), cuyo destino es una cola SQS **estándar** de tareas, solo para esto (los chats no pasan por cola). El cuerpo lleva la tarea y la hora programada, que pone el propio Scheduler con `<aws.scheduler.scheduled-time>`; con ellas y el `oid` del dueño de la tarea, `api` calcula el `run_id` = `{oid}.` + los primeros 26 caracteres en base32 de `hash(tarea, hora programada)`, así que una entrega repetida del mismo disparo (SQS estándar entrega al menos una vez) da la misma ejecución y la transacción que la crea falla por "ya existe". No hace falta FIFO: el orden por chat y la deduplicación los dan `ejecucion_activa` y ese `run_id`. Scheduler entrega entre 1 y 49 s después de la hora (50 disparos a la misma hora, en la sonda 12); un disparo que no se puede entregar (por ejemplo, sin permiso sobre la clave) va a la cola de fallidos del horario con `ERROR_CODE` y el cuerpo original dentro de `MessageBody`. El rol de ejecución de los horarios tiene `sqs:SendMessage` sobre la cola y `kms:GenerateDataKey` y `kms:Decrypt` sobre su clave, y la política de la clave lo admite. El "ejecutar ahora" de la app lo atiende `api`, que deja un mensaje igual en la misma cola.
-- **El consumidor, dentro de `api`**: un bucle en cada réplica con long polling (`WaitTimeSeconds` = 20, lotes de hasta 10) y pocos mensajes a la vez (unos 5 por réplica), con un limitador de unos 5 arranques por segundo por réplica para no comerse las 25 sesiones nuevas por segundo que comparte con los chats; el pico de los lunes a las 8 se reparte en unos segundos. *Visibility timeout* de 120 s; si el chat de la tarea tiene una ejecución en marcha (el usuario está escribiendo en él, o sigue la ejecución anterior de la tarea), `ChangeMessageVisibility` a 1–5 minutos con espera aleatoria, sin crear nada. Si AgentCore sigue respondiendo 429 o 409 tras los reintentos de `lanzar()` (los mismos que en un chat), `api` deshace la ejecución que acaba de crear (borra `RUN#` y `ejecucion_activa` en una transacción, condicional a que siga en `pendiente`) y aplica el mismo `ChangeMessageVisibility`: así la entrega siguiente la vuelve a crear con el mismo `run_id`, en vez de chocar con "ya existe" y borrar el mensaje. Un 402 (`ServiceQuotaExceededException`) se trata como en un chat: `fallida` con `fin` (`error`), un fallo más de la tarea y el mensaje se borra; un disparo con más de 30 minutos de retraso se salta y queda anotado en la tarea. Cada `ChangeMessageVisibility` cuenta como una entrega, así que `maxReceiveCount` es 30 (con 8, una tarea esperando a un chat ocupado acabaría en la DLQ antes de los 30 minutos); pasadas esas entregas va a una DLQ con alarma; lo que nadie consume caduca por la retención (4 días). Al recibir SIGTERM en un despliegue deja de leer, termina lo que tiene en curso y devuelve con visibilidad 0 lo que no ha empezado; tarda hasta unos 20 s en salir del long polling, así que el `stopTimeout` de la tarea de ECS es de 45 s o más. Un mensaje a medias reaparece y el `run_id` lo hace repetible: la transacción falla en `RUN#` por "ya existe" (mirando ese motivo primero, porque si la ejecución sigue activa también falla `ejecucion_activa`) y el mensaje se borra. El hash usa la cadena de `<aws.scheduler.scheduled-time>` tal como llega, sin normalizar.
+- **El consumidor, dentro de `api`**: un bucle en cada réplica con long polling (`WaitTimeSeconds` = 20, lotes de hasta 10) y pocos mensajes a la vez (unos 5 por réplica), con un limitador de unos 5 arranques por segundo por réplica para no comerse las 25 sesiones nuevas por segundo que comparte con los chats; el pico de los lunes a las 8 se reparte en unos segundos. *Visibility timeout* de 120 s; si el chat de la tarea tiene una ejecución en marcha (el usuario está escribiendo en él, o sigue la ejecución anterior de la tarea), `ChangeMessageVisibility` a 1–5 minutos con espera aleatoria, sin crear nada. Si AgentCore sigue respondiendo 429 o 409 tras los reintentos de `lanzar()` (los mismos que en un chat), `api` deshace la ejecución que acaba de crear (borra `RUN#` y `ejecucion_activa` en una transacción, condicional a que siga en `pendiente`) y aplica el mismo `ChangeMessageVisibility`: así la entrega siguiente la vuelve a crear con el mismo `run_id`, en vez de chocar con "ya existe" y borrar el mensaje. Un 402 (`ServiceQuotaExceededException`) se trata como en un chat: `fallida` con `fin` (`error`), un fallo más de la tarea y el mensaje se borra. Un disparo con más de 30 minutos de retraso se salta y queda anotado en la tarea. Cada `ChangeMessageVisibility` cuenta como una entrega, así que `maxReceiveCount` es 30 (con 8, una tarea esperando a un chat ocupado acabaría en la DLQ antes de los 30 minutos); pasadas esas entregas va a una DLQ con alarma; lo que nadie consume caduca por la retención (4 días). Al recibir SIGTERM en un despliegue deja de leer, termina lo que tiene en curso y devuelve con visibilidad 0 lo que no ha empezado; tarda hasta unos 20 s en salir del long polling, así que el `stopTimeout` de la tarea de ECS es de 45 s o más. Un mensaje a medias reaparece y el `run_id` lo hace repetible: la transacción falla en `RUN#` por "ya existe" (mirando ese motivo primero, porque si la ejecución sigue activa también falla `ejecucion_activa`) y el mensaje se borra. El hash usa la cadena de `<aws.scheduler.scheduled-time>` tal como llega, sin normalizar.
 - **Lo que Scheduler no reintenta**: los errores permanentes del destino (KMS denegado o desactivado, cola inexistente) van a la cola de fallidos del horario sin reintentar; si lo que falla es el propio rol del horario, el disparo se pierde sin dejar rastro en ninguna cola, porque esa cola se escribe con el mismo rol. Hay alarmas sobre las métricas de Scheduler `InvocationsFailedToBeSentToDeadLetterCount` e `InvocationDroppedCount`. Si algún día la carga de tareas molesta a los chats, el mismo código corre como un servicio aparte, con la misma imagen y otro punto de entrada.
 - **Antes de arrancar**, `api` comprueba que la tarea sigue activa, que el usuario sigue pudiendo usar el agente (con los grupos de Entra guardados en `USER#{oid}` en su última petición: los de una tarea son, como mucho, tan antiguos como esa petición, y una tarea cuyo usuario no entra en 90 días se pausa, igual que caduca su refresh token) y que le queda presupuesto; crea la ejecución en el chat de la tarea con la versión publicada del agente y la arranca con el mismo `lanzar()` que un mensaje: OBO vigente, STS, token de ejecución, `InvokeAgentRuntime` con la sesión del chat de la tarea. No necesita el token de Entra del usuario. El kernel no distingue una ejecución programada de una normal.
 - **OBO sin el usuario delante**: cuando una herramienta actúa como el usuario, el MCP Hub pide el token al backend (ver "Tokens OBO"), que lo renueva con el refresh token si ha caducado, sin el usuario. `api` lo renueva igual antes de arrancar la tarea. Si Entra rechaza la renovación (demasiado tiempo sin actividad, cambio de contraseña, cuenta desactivada, sesiones revocadas o acceso condicional), el registro se marca como rechazado y queda en la auditoría; `api` no arranca la tarea, la pausa y se avisa al usuario para que vuelva a abrir la app.
@@ -1339,6 +1370,8 @@ flowchart LR
   D -- "Streams (fin con traceparent)" --> S[Lambda de Streams]
   S -- "/internal/push (cabeceras)" --> API
   D -. "RUN# (traceparent)" .-> V[Vigilante]
+  D -. "RUN# (traceparent)" .-> B
+  H -- "/internal/obo (cabeceras)" --> API
   API -- "atributo SQS" --> B[Lambda de borrado]
 ```
 

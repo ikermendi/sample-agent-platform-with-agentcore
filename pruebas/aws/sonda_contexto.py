@@ -21,6 +21,10 @@ Qué comprueba:
      hasta la respuesta, tamaño del snapshot y del stash; y que el modelo recupera con `retrieve_context` un
      dato de un resultado recortado del turno 7. Con otras credenciales (otro chat) el stash no se lee.
 
+  5. (Solo con SONDA_PARTES=5.) Un chat de 30 turnos con el gestor del kernel: en cada pasada del resumen, la
+     utilización que ve Strands (de `projected_input_tokens`, inflada tras un resumen) frente a la real
+     (CountTokens): ¿salta algún resumen con la real por debajo del 85 %?
+
 Crea un bucket y un rol "sonda-n2-ctx-<sufijo>" con la etiqueta sonda=nivel2 y los borra al acabar aunque
 falle. Coste: céntimos (Haiku 4.5 por defecto); unos 10 minutos por la cuota de Haiku de la cuenta de pruebas
 (10 llamadas por minuto). Necesita strands-agents==1.63.0 en el entorno. Uso:
@@ -28,6 +32,7 @@ falle. Coste: céntimos (Haiku 4.5 por defecto); unos 10 minutos por la cuota de
     AWS_PROFILE=sonda SONDA_REGION=eu-north-1 .venv312/bin/python sonda_contexto.py
     SONDA_MODELO=eu.anthropic.claude-sonnet-4-6 ...   # con Sonnet 4.6
     SONDA_PARTES=1,3 ...                              # solo algunas partes (la 3 va dentro de la 1 y la 2)
+    SONDA_PARTES=5 SONDA_TURNOS=30 ...                # solo la 5: ¿resume de más tras un resumen?
     SONDA_VOLCADO=mensajes.json ...                   # guarda agent.messages del chat de la parte 1
 """
 from __future__ import annotations
@@ -36,6 +41,8 @@ import json
 import os
 import random
 import re
+import signal
+import sys
 import time
 import uuid
 
@@ -44,6 +51,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from strands import Agent, tool
 from strands.agent.conversation_manager import SlidingWindowConversationManager
+from strands._context_manager.strategies.offload.summarize import SummarizeStrategy
 from strands.experimental.context_manager import ContextManager, Offload
 from strands.hooks import BeforeModelCallEvent, BeforeToolCallEvent
 from strands.models.bedrock import BedrockModel
@@ -58,6 +66,7 @@ MODELO = os.environ.get("SONDA_MODELO", f"{PREFIJO}.anthropic.claude-haiku-4-5-2
 VENTANA = int(os.environ.get("SONDA_VENTANA", "12000"))
 GESTOR = os.environ.get("SONDA_GESTOR", "kernel")  # "kernel" (resumen configurado) o "auto" (el texto "auto")
 PARTES = set(os.environ.get("SONDA_PARTES", "1,2,3,4").split(","))
+TURNOS_5 = int(os.environ.get("SONDA_TURNOS", "30"))
 # $ por millón: entrada, salida, escritura en caché (5 min), lectura de caché
 PRECIOS = {"haiku": (1.0, 5.0, 1.25, 0.10), "sonnet": (3.0, 15.0, 3.75, 0.30)}
 PRECIO = PRECIOS["haiku" if "haiku" in MODELO else "sonnet"]
@@ -116,10 +125,11 @@ def tabla_ventas(zona: str, codigo_zona: str) -> str:
 
 @tool
 def consultar_ventas(region: str) -> str:
-    """Devuelve todos los pedidos de una región (norte, sur, este, oeste, centro) con su total.
+    """Devuelve todos los pedidos de una región (norte, sur, este, oeste, centro) o de una zona (zona01 a zona50)
+    con su total.
 
     Args:
-        region: nombre de la región, en minúscula.
+        region: nombre de la región o de la zona, en minúscula.
     """
     region = region.strip().lower()
     if region in REGIONES:
@@ -605,7 +615,63 @@ def parte_4(cuenta):
 
 # ---------------------------------------------------------------- principal
 
+# ---------------------------------------------------------------- parte 5: ¿resúmenes de más?
+
+DISPAROS: list[dict] = []
+_apply_original = SummarizeStrategy.apply
+
+
+async def _apply_medido(self, context):
+    """Antes de cada pasada del resumen, la utilización que ve Strands (de projected_input_tokens) y la real
+    (CountTokens de Bedrock sobre los mismos mensajes, herramientas y prompt de sistema)."""
+    ag = context.agent
+    ventana = ag.model.context_window_limit
+    nativo = ag.model._cuenta_nativa(context.messages, ag.tool_registry.get_all_tool_specs(),
+                                     [{"text": ag.system_prompt}] if ag.system_prompt else None)
+    reg = {"vista": context.utilization, "real": nativo / ventana if isinstance(nativo, int) else None,
+           "mensajes": len(context.messages), "overflow": context.overflow}
+    reg["actua"] = await _apply_original(self, context)
+    DISPAROS.append(reg)
+    return reg["actua"]
+
+
+def parte_5(cuenta):
+    print(f"\n--- Parte 5: {TURNOS_5} turnos con la ventana de {VENTANA}: ¿resume de más tras un resumen?", flush=True)
+    SummarizeStrategy.apply = _apply_medido
+    try:
+        ses = sesion(cuenta, "chat-largo-real")
+        m = modelo(ses, VENTANA)
+        a = agente(ses, "chat-largo-real", m)
+        bien, por_turno = 0, []
+        for t in range(1, TURNOS_5 + 1):
+            zona = f"zona{t:02d}"
+            n_d, n_ll = len(DISPAROS), len(m.llamadas)
+            r = str(a(f"¿Cuánto vendió en total la {zona}? Solo la cifra.")).strip()
+            ok = tiene_numero(r, sum(f[4] for f in pedidos(zona, f"Z{t:02d}")))
+            bien += ok
+            act = [d for d in DISPAROS[n_d:] if d["actua"]]
+            por_turno.append(len(act))
+            for d in act:
+                info(f"T{t}: resumen con utilización vista {d['vista']:.2f} y real "
+                     f"{d['real'] if d['real'] is None else round(d['real'], 2)} ({d['mensajes']} mensajes"
+                     f"{', overflow' if d['overflow'] else ''})")
+            if not ok:
+                info(f"T{t} MAL → {r[:160]!r}")
+        res = [d for d in DISPAROS if d["actua"]]
+        de_mas = [d for d in res if d["real"] is not None and d["real"] < 0.85 and not d["overflow"]]
+        info(f"aciertos {bien}/{TURNOS_5}; resúmenes por turno {por_turno}; "
+             f"coste ${coste(m.llamadas):.4f} ({len([l for l in m.llamadas if l['resumen']])} resúmenes)")
+        anota("5.1 el modo del kernel acierta en un chat largo", bien == TURNOS_5, f"{bien} de {TURNOS_5}")
+        anota("5.2 ningún resumen salta con la utilización real por debajo del 85 %", not de_mas,
+              f"{len(de_mas)} de {len(res)} de más; real al resumir {[round(d['real'], 2) for d in res if d['real']]}; "
+              f"vista {[round(d['vista'], 2) for d in res]}")
+        anota("5.3 como mucho un resumen por turno", max(por_turno, default=0) <= 1, f"máximo {max(por_turno, default=0)}")
+    finally:
+        SummarizeStrategy.apply = _apply_original
+
+
 def main():
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(1))  # que el finally borre aunque paren la sonda
     print(f"región {REGION} · modelo {MODELO} · ventana {VENTANA} · partes {sorted(PARTES)}", flush=True)
     try:
         cuenta = crear()
@@ -613,6 +679,8 @@ def main():
             parte_1_y_2(cuenta)
         if "4" in PARTES:
             parte_4(cuenta)
+        if "5" in PARTES:
+            parte_5(cuenta)
     finally:
         borrar()
     ok = sum(1 for r in resultados if r[1])

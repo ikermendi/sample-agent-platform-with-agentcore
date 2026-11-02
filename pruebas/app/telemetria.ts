@@ -1,10 +1,8 @@
-// Trazas de la app: OpenTelemetry sin instrumentación automática, ids en formato X-Ray, las dos cabeceras
-// (`traceparent` y `X-Amzn-Trace-Id`) en cada petición y un exportador propio que envía OTLP JSON con fetch
-// a `POST /telemetry`. Es lo que el documento de arquitectura describe para la app (Expo, iOS y web).
+// Trazas de la app: OpenTelemetry sin instrumentación automática, ids en formato X-Ray, `traceparent` en cada
+// petición y un exportador propio que envía OTLP JSON con fetch a `POST /telemetry`. Es lo que el documento de arquitectura describe para la app (Expo, iOS y web).
 import { context, propagation, trace, SpanKind, type Span } from "@opentelemetry/api";
-import { CompositePropagator, W3CTraceContextPropagator, ExportResultCode, type ExportResult } from "@opentelemetry/core";
+import { W3CTraceContextPropagator, ExportResultCode, type ExportResult } from "@opentelemetry/core";
 import { AWSXRayIdGenerator } from "@opentelemetry/id-generator-aws-xray";
-import { AWSXRayPropagator } from "@opentelemetry/propagator-aws-xray";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import {
   SimpleSpanProcessor, StackContextManager, TracerProvider, type ReadableSpan, type SpanExporter,
@@ -55,14 +53,11 @@ export function iniciar(base: string) {
   });
   trace.setGlobalTracerProvider(proveedor);
   context.setGlobalContextManager(new StackContextManager().enable());
-  // el orden importa poco aquí: la app solo inyecta, y las dos cabeceras salen del mismo tramo
-  propagation.setGlobalPropagator(new CompositePropagator({
-    propagators: [new W3CTraceContextPropagator(), new AWSXRayPropagator()],
-  }));
+  propagation.setGlobalPropagator(new W3CTraceContextPropagator());
   return proveedor;
 }
 
-// fetch con un tramo CLIENT y las dos cabeceras de contexto
+// fetch con un tramo CLIENT y `traceparent`
 export async function pedir(url: string, init: RequestInit = {}) {
   const tr = trace.getTracer("app");
   return tr.startActiveSpan(`HTTP ${init.method ?? "GET"}`, { kind: SpanKind.CLIENT }, async (s: Span) => {

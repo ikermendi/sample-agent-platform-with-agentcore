@@ -9,7 +9,7 @@ import { appendFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 
 const REGISTRO = process.env.REGISTRO ?? "registro.jsonl";
-const PERMITIDAS = process.env.CORS_CABECERAS ?? "content-type,traceparent,tracestate,x-amzn-trace-id";
+const PERMITIDAS = process.env.CORS_CABECERAS ?? "content-type,traceparent,tracestate";
 const apunta = (x) => appendFileSync(REGISTRO, JSON.stringify(x) + "\n");
 
 createServer((req, res) => {

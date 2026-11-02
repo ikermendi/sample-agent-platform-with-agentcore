@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
         <title id="dg-title">Diagrama de la arquitectura</title>
-        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api, que crea y lanza las ejecuciones, y las Lambdas vigilante y de borrado; las Lambdas de cierre (Streams) y de coste (que suma el gasto desde el registro de invocaciones de Bedrock), dibujadas junto a DynamoDB, también están en esta VPC), DynamoDB, la cola SQS estándar de tareas (Scheduler deja los disparos y el backend los lee y los lanza como un chat), la VPC de agentes con el kernel en AgentCore Runtime V2, una microVM por chat, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
+        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api, que crea y lanza las ejecuciones, y las Lambdas vigilante y de borrado; dos Lambdas dibujadas junto a DynamoDB, también en esta VPC: la de cierre, que lee el stream de DynamoDB, cierra con cerrar(run_id) al ver fin y avisa al backend, y la de coste, que recibe el registro de invocaciones de Bedrock desde CloudWatch Logs y escribe el gasto, la denegación por presupuesto y los avisos), DynamoDB, la cola SQS estándar de tareas (Scheduler deja los disparos y el backend los lee y los lanza como un chat), la VPC de agentes con el kernel en AgentCore Runtime V2, una microVM por chat, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Code Interpreter y Evaluations). El hub lee el catálogo y las aprobaciones en DynamoDB (no dibujado). No se dibuja la VPC de Code Interpreter.</desc>
         <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;font-family:var(--font-sans);background:#fff}
 .frame { fill: none; stroke-width: 1.5; }
 .frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
@@ -100,10 +100,16 @@
         <text class="bt" x="602" y="462">DynamoDB (2 tablas)</text>
         <text class="bs" x="602" y="480">chats · ejecuciones · eventos · OBO</text>
         <text class="bs" x="602" y="496">tareas · USAGE · catálogo · auditoría</text>
-        <rect class="box work" x="845" y="440" width="125" height="80" rx="8"/>
-        <text class="bt" x="857" y="462">Streams y coste</text>
-        <text class="bs" x="857" y="480">cierre (fin)</text>
-        <text class="bs" x="857" y="496">€ ← log de Bedrock</text>
+        <rect class="box work" x="845" y="440" width="135" height="80" rx="8"/>
+        <text class="bt" x="857" y="462">Cierre · Lambda</text>
+        <text class="bs" x="857" y="480">DynamoDB Streams</text>
+        <text class="bs" x="857" y="496">fin → cerrar(run_id)</text>
+        <text class="bs" x="857" y="512">push al backend</text>
+        <rect class="box work" x="995" y="440" width="125" height="80" rx="8"/>
+        <text class="bt" x="1007" y="462">Coste · Lambda</text>
+        <text class="bs" x="1007" y="480">€ ← log de Bedrock</text>
+        <text class="bs" x="1007" y="496">USAGE · COSTE</text>
+        <text class="bs" x="1007" y="512">DENY · avisos</text>
         <rect class="box core" x="590" y="598" width="415" height="160" rx="8"/>
         <text class="bt" x="602" y="620">AgentCore Runtime V2 · kernel (Python, Strands)</text>
         <text class="bs" x="602" y="638">1 microVM por chat · sin token del usuario</text>
@@ -195,6 +201,9 @@
         <g class="badge"><circle cx="818" cy="350" r="11"/><text x="818" y="350">4</text></g>
         <path class="wire" d="M820,468 H842" marker-end="url(#arr)"/>
         <path class="wire" d="M845,495 H823" marker-end="url(#arr)"/>
+        <path class="wire dash" d="M1490,427 V418 H1060 V437" marker-end="url(#arr)"/>
+        <text class="wl" x="1215" y="412">registro de invocaciones (CloudWatch Logs)</text>
+        <path class="wire" d="M1060,520 V538 H705 V523" marker-end="url(#arr)"/>
         <path class="wire" d="M1380,97 V90 H900 V107" marker-end="url(#arr)"/>
         <text class="wl" x="1000" y="66">lee los disparos de tareas</text>
         <path class="wire" d="M1505,128 H1488" marker-end="url(#arr)"/>
@@ -202,7 +211,7 @@
         <g class="badge"><circle cx="1135" cy="400" r="11"/><text x="1135" y="400">5</text></g>
         <text class="wl" x="1143" y="470">InvokeAgentRuntime</text>
         <path class="wire dash" d="M1200,597 V250 H1013" marker-end="url(#arr)"/>
-        <text class="wl" x="1208" y="420">token OBO</text>
+        <text class="wl" x="1208" y="370">token OBO</text>
         <path class="wire" d="M660,597 V523" marker-end="url(#arr)"/>
         <g class="badge"><circle cx="660" cy="560" r="11"/><text x="660" y="560">9</text></g>
         <path class="wire" d="M1005,615 H1048 V556 H1490 V523" marker-end="url(#arr)"/>

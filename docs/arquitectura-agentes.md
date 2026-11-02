@@ -791,7 +791,7 @@ herramientas:
   - nombre: generar_pdf
     script: scripts/generar_pdf.py
     descripcion: Convierte un Markdown del espacio del chat en un PDF en salida/.
-    entrada:                       # esquema JSON de los argumentos; Strands lo valida antes de llamar
+    entrada:                       # esquema JSON de los argumentos: lo ve el modelo y el kernel lo valida antes de lanzar el script (Strands no valida la entrada de una AgentTool propia)
       type: object
       properties:
         origen: { type: string, description: "Ruta del Markdown, relativa al espacio del chat" }
@@ -838,7 +838,7 @@ knowledge_bases:
   - id: <id de la Knowledge Base de ventas>    # solo cuál usa; su contenido no se versiona
 ejecucion_codigo: code_interpreter # ninguna | local | code_interpreter
 memoria: true                      # lee la memoria del usuario y ofrece `recordar`
-confirmaciones_extra: [crm.anotar_oportunidad] # escribe en el CRM como el usuario; puede añadir, no quitar las marcadas
+requieren_confirmacion: [crm.anotar_oportunidad] # además de las marcadas con `confirmar`; escribe en el CRM como el usuario; puede añadir, no quitar las marcadas
 adjuntos:
   tipos: [pdf, xlsx, csv]
   tamano_max_mb: 25

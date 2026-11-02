@@ -562,7 +562,11 @@ def borrar():
     for ns in sd.list_namespaces()["Namespaces"]:
         if ns["Name"] == NOMBRE:
             for s in sd.list_services(Filters=[{"Name": "NAMESPACE_ID", "Values": [ns["Id"]]}])["Services"]:
-                for i in sd.list_instances(ServiceId=s["Id"]).get("Instances", []):
+                try:  # ECS puede estar borrando el servicio de Cloud Map a la vez
+                    instancias = sd.list_instances(ServiceId=s["Id"]).get("Instances", [])
+                except ClientError:
+                    instancias = []
+                for i in instancias:
                     intenta("instancia cloud map", lambda s=s, i=i: sd.deregister_instance(ServiceId=s["Id"], InstanceId=i["Id"]))
                 time.sleep(5)
                 intenta("servicio cloud map", lambda s=s: sd.delete_service(Id=s["Id"]))

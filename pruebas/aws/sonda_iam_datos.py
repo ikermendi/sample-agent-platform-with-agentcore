@@ -178,7 +178,7 @@ def probar(cuenta):
                     lambda: d.put_item(TableName=T, Item={"pk": {"S": f"USAGE#{oid}#2026-11"}, "sk": {"S": "X"}}))
 
     # 3. S3 por prefijo
-    conv = f"espacios/{oid}/{chat}/conversacion/session/{chat}/snapshot_latest.json"
+    conv = f"espacios/{oid}/{chat}/conversacion/session/{chat}/scopes/agent/principal/snapshots/snapshot_latest.json"
     mem = f"espacios/{oid}/memoria/preferencias.md"
     espera_permitido("S3: escribir conversacion/ de su chat", lambda: s3s.put_object(Bucket=T, Key=conv, Body=b"{}"))
     espera_permitido("S3: escribir memoria/ de su usuario", lambda: s3s.put_object(Bucket=T, Key=mem, Body=b"- tono: directo\n"))

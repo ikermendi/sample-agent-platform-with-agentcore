@@ -757,6 +757,100 @@ Qué puede usar cada usuario y cómo se cambia un agente sin romperlo.
 - **En ejecución**: el kernel recibe en la carga la versión del agente con sus `skill@versión` y hashes, trae esas carpetas y comprueba el hash. Una ejecución no cambia de versión a mitad, y cada ejecución deja registradas las versiones con las que corrió.
 - **Dependencias**: la VPC de agentes no tiene internet, así que no hay `pip install` en ejecución. El `tools.yaml` declara las librerías que usa la skill; tienen que estar en la imagen del kernel, y el panel rechaza la versión si no lo están.
 
+### Ejemplo: una skill y un agente
+
+Los dos ejemplos son ilustrativos: el esquema de `tools.yaml` está por cerrar (ver la fila "Herramientas de skills" en "Por verificar"), y los nombres de campo pueden cambiar. Lo que fijan es qué se configura y dónde vive cada cosa.
+
+**Una skill: `informe-pdf`, versión 3.** Es una carpeta en `skills/informe-pdf/3/`, inmutable, con las instrucciones, los scripts y la declaración de sus herramientas:
+
+```text
+skills/informe-pdf/3/
+├── SKILL.md          # instrucciones; su cabecera (nombre y descripción) es lo único que va siempre en el prompt
+├── tools.yaml        # qué scripts se exponen como herramientas y cómo se pintan
+└── scripts/
+    └── generar_pdf.py
+```
+
+```markdown
+---
+name: informe-pdf
+description: Genera un informe en PDF a partir de un texto en Markdown y, opcionalmente, tablas en CSV del espacio del chat.
+---
+
+# Informe en PDF
+
+1. Redacta el informe en Markdown en `trabajo/informe.md` (títulos con `#`, tablas como CSV aparte).
+2. Llama a `generar_pdf` con esa ruta. El PDF queda en `salida/` y el usuario lo ve como un fichero.
+3. No inventes cifras: usa solo las que vengan de los adjuntos o de otras herramientas.
+```
+
+```yaml
+# tools.yaml: cada entrada es una herramienta que el kernel registra al activar la skill
+herramientas:
+  - nombre: generar_pdf
+    script: scripts/generar_pdf.py
+    descripcion: Convierte un Markdown del espacio del chat en un PDF en salida/.
+    entrada:                       # esquema JSON de los argumentos; Strands lo valida antes de llamar
+      type: object
+      properties:
+        origen: { type: string, description: "Ruta del Markdown, relativa al espacio del chat" }
+        titulo: { type: string }
+      required: [origen]
+    etiqueta: "Generando el PDF"   # lo que la app pinta en la tarjeta de la herramienta
+    resumen: "PDF {nombre_fichero} ({paginas} págs.)"  # cómo se resume el resultado en el mensaje consolidado
+    escribe_ficheros: true         # la revisión lo muestra; tras la herramienta, el kernel sube los cambios
+    confirmar: false               # true: pide aprobación del usuario antes de cada llamada
+librerias: [markdown, weasyprint]  # tienen que estar en la imagen del kernel; si no, el panel rechaza la versión
+```
+
+El estado (borrador, aprobada o retirada), el hash del contenido, el autor y quién la aprobó van en DynamoDB, no en la carpeta.
+
+**Un agente: "Analista de ventas", versión 7.** La ficha y la versión van por separado: la ficha se cambia al momento; la versión es inmutable y solo se cambia publicando otra.
+
+```yaml
+# Ficha (AGENT#analista-ventas): no se versiona
+nombre: Analista de ventas
+descripcion: Responde sobre las ventas del trimestre y prepara informes.
+icono: grafico
+grupos: [<GUID del grupo de Entra "Ventas">, <GUID del grupo "Dirección">]
+```
+
+```yaml
+# Versión (AGENT#analista-ventas / VERSION#7): inmutable; el puntero `publicada` dice cuál se usa
+instrucciones: |
+  Eres el analista de ventas de la empresa. Responde con cifras y cita de dónde salen.
+  Si te piden un informe, usa la skill informe-pdf.
+modelo:
+  id: <id del modelo en el catálogo del panel>   # el precio y la ventana salen del catálogo
+  temperatura: 0.2
+  max_tokens: 8000
+  razonamiento: bajo
+contexto:                          # quién recorta (ver "Contexto: cuánto ocupa y quién lo recorta")
+  gestor: resumen                  # ventana_deslizante (con window_size) | resumen | automatico
+  umbral: 0.7                      # fracción de la ventana del modelo a la que se resume
+herramientas_hub:                  # lista allow: solo lo que de verdad usa
+  documentos: [buscar_documentos]
+  crm: [buscar_cliente, ver_oportunidad, anotar_oportunidad]
+skills:
+  - informe-pdf@3                  # versión fija; el kernel comprueba el hash al traerla
+knowledge_bases:
+  - id: <id de la Knowledge Base de ventas>    # solo cuál usa; su contenido no se versiona
+ejecucion_codigo: code_interpreter # ninguna | local | code_interpreter
+memoria: true                      # lee la memoria del usuario y ofrece `recordar`
+confirmaciones_extra: [crm.anotar_oportunidad] # escribe en el CRM como el usuario; puede añadir, no quitar las marcadas
+adjuntos:
+  tipos: [pdf, xlsx, csv]
+  tamano_max_mb: 25
+subagentes:
+  - nombre: revisor
+    descripcion: Revisa un informe y devuelve una lista de errores de cifras o de redacción.
+    instrucciones: Eres un revisor exigente. Devuelve solo la lista de errores, sin reescribir el informe.
+    modelo: { id: <id de un modelo más barato del catálogo> }
+    herramientas_hub: {}           # más corta que la del principal: aquí, ninguna
+```
+
+Al publicar, el panel valida lo mismo que en "Versiones de agentes": que `informe-pdf@3` está aprobada, que las herramientas existen en el registro del hub, que la Knowledge Base existe y que el modelo está activo en el catálogo. `api` copia la versión publicada en la carga de cada ejecución, y mete en el token de ejecución la unión de las listas `allow` del principal y de sus subagentes.
+
 ### Subagentes
 
 - **Qué es**: un agente puede delegar una tarea acotada en otro agente ("revisa este documento y dame una lista de errores") y quedarse solo con el resultado, sin llenar su contexto. Strands lo trae de serie (comprobado en su código, 1.63.0): el patrón "agente como herramienta" (`strands/agent/_agent_as_tool.py`) y, en `strands.multiagent`, `Graph` y `Swarm`.
@@ -1076,7 +1170,7 @@ sequenceDiagram
 
 Ninguna llama a otra Lambda; se coordinan por DynamoDB y por la cola de borrados (la de tareas la consume `api`, no una Lambda). Cada una tiene un disparador y un trabajo: Streams reacciona a lo que se escribe, la de coste a lo que registra Bedrock, la vigilante a lo que no pasa y la de borrado a un mensaje en su cola. Lo que comparten (cerrar una ejecución, precios, límites) vive en `packages/dominio`.
 
-**La Lambda de Streams, en detalle.** Una sola función (`lambdas/streams`) que cierra ejecuciones y avisa de aprobaciones pendientes: un rol, una suscripción al stream y un despliegue, y queda libre el segundo de los dos consumidores que DynamoDB admite por stream sin perder rendimiento. El coste ya no pasa por aquí. Lo que exige:
+**La Lambda de Streams, en detalle.** Una sola función (`lambdas/streams`) que cierra ejecuciones y avisa de aprobaciones pendientes: un rol, una suscripción al stream y un despliegue, y deja libre el segundo de los dos consumidores que DynamoDB admite por stream sin perder rendimiento. Lo que exige:
 
 - **Filtro en la suscripción**: solo inserciones (`INSERT`) de los dos tipos de evento; así los borrados del TTL (registros `REMOVE`) ni llegan a la función.
 - **Lotes acotados**: lote de 10 registros, `BisectBatchOnFunctionError`, `MaximumRetryAttempts` = 2, `MaximumRecordAgeInSeconds` de unos minutos y un destino `OnFailure` (SQS) con alarma. Sin esto, un registro que haga fallar la función (un `fin` malformado escrito por un kernel en modo local) se reintenta hasta 24 horas y bloquea su partición del stream, y con él el cierre de las ejecuciones que compartan partición. Con bisect y dos reintentos, el peor caso son unas doce invocaciones cortas antes de descartar el registro: segundos, no horas.

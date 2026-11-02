@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plataforma-agentes/esquemas/tools.yaml/1",
+  "title": "tools.yaml de una versión de skill",
+  "description": "Qué scripts de la skill se exponen al modelo como herramientas y cómo se pintan. Lo valida el panel al subir la versión y el kernel al cargarla.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["formato", "herramientas"],
+  "properties": {
+    "formato": {
+      "const": 1,
+      "description": "Versión de este esquema. Un cambio incompatible sube el número y el kernel admite los dos durante la transición."
+    },
+    "herramientas": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/herramienta" }
+    },
+    "librerias": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+      "description": "Módulos de Python que importan los scripts, además de la biblioteca estándar. Tienen que estar en la imagen del kernel."
+    }
+  },
+  "$defs": {
+    "herramienta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nombre", "script", "descripcion", "entrada", "etiqueta"],
+      "properties": {
+        "nombre": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,47}$",
+          "description": "Nombre que ve el modelo. Solo minúsculas, cifras y _: Strands trata - y _ como el mismo nombre, y Bedrock admite 64 caracteres."
+        },
+        "script": {
+          "type": "string",
+          "pattern": "^scripts/[A-Za-z0-9_][A-Za-z0-9_/-]*\\.py$",
+          "description": "Ruta del script dentro de la carpeta de la versión, siempre bajo scripts/."
+        },
+        "descripcion": { "type": "string", "minLength": 10, "maxLength": 1024 },
+        "entrada": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "object" } },
+          "description": "Esquema JSON (2020-12) de los argumentos. El kernel lo valida antes de lanzar el script."
+        },
+        "salida": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "object" } },
+          "description": "Esquema JSON de lo que el script escribe en stdout. Si está, el kernel lo valida y el resumen solo puede usar sus campos."
+        },
+        "etiqueta": { "type": "string", "minLength": 1, "maxLength": 60, "description": "Lo que pinta la app en la tarjeta de la herramienta." },
+        "resumen": { "type": "string", "maxLength": 200, "description": "Cómo se resume el resultado en el mensaje consolidado; {campo} sale de la salida." },
+        "escribe_ficheros": { "type": "boolean", "default": false, "description": "Tras la herramienta, el kernel sube los cambios del espacio del chat." },
+        "confirmar": { "type": "boolean", "default": false, "description": "Pide aprobación del usuario antes de cada llamada." },
+        "tiempo_max_s": { "type": "integer", "minimum": 1, "maximum": 600, "default": 120 }
+      }
+    }
+  }
+}

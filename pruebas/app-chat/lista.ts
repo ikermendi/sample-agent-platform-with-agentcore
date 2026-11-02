@@ -1,14 +1,27 @@
 // La lista de chats para `useRemoteThreadListRuntime`, sobre `/chats` del backend.
 import type { RemoteThreadListAdapter } from "@assistant-ui/react-native";
 import { createAssistantStream } from "assistant-stream";
-import { BASE } from "./chats";
+import { BASE, informa } from "./chats";
+import { listaGuardada, rutaCache, sincronizar } from "./cache";
 
 const pide = (ruta: string, init?: RequestInit): Promise<any> =>
   fetch(`${BASE}${ruta}`, { ...init, headers: { "Content-Type": "application/json" } }).then((r) => (r.status === 204 ? {} : r.json()));
 
 export const listaDeChats: RemoteThreadListAdapter = {
+  // Al arrancar: la lista entera del backend; en iOS se sincroniza con la caché (lo que no viene se borra).
   async list() {
-    const { chats } = await pide("/chats");
+    const t0 = performance.now();
+    const guardada = listaGuardada();
+    const msLeerCache = Math.round((performance.now() - t0) * 10) / 10;
+    const t1 = performance.now();
+    const r = await fetch(`${BASE}/chats`);
+    const texto = await r.text();
+    const msRed = Math.round(performance.now() - t1);
+    const t2 = performance.now();
+    const { chats } = JSON.parse(texto);
+    const msParsear = Math.round((performance.now() - t2) * 10) / 10;
+    const sinc = sincronizar(chats);
+    informa({ tipo: "lista_sincronizada", chats: chats.length, enCache: guardada.length, msLeerCache, bytes: texto.length, msRed, msParsear, sinc, ruta: rutaCache() });
     return { threads: chats.map((c: any) => ({ status: c.estado, remoteId: c.id, title: c.titulo ?? undefined })) };
   },
   async initialize() {

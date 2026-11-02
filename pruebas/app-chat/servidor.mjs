@@ -9,6 +9,9 @@
 // CORTE_MS corta cada conexión SSE a los N ms (como el tope de 15 minutos o una réplica que se drena);
 // APROBACION_MS es lo que se espera una aprobación antes de caducar. Qué hace una ejecución depende del texto
 // del mensaje: "aprobar" pide aprobación de `enviar_correo`; "largo", unos 9 s de texto; si no, unos 3 s.
+//
+// SEMBRAR_CHATS=500 SEMBRAR_MENSAJES=500 arranca con 500 chats de 4 mensajes y el más reciente (`chat1`)
+// con 500, para la caché de iOS; `GET /chats/{id}/messages?after=<seq>` da solo los posteriores.
 import { createServer } from "node:http";
 import { appendFileSync, readFileSync, existsSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
@@ -22,6 +25,21 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 const chats = new Map(); // id -> { id, titulo, estado, actualizado, mensajes: [{ seq, rol, partes }], activa }
 const runs = new Map(); // run_id -> { chat, eventos: [{ id, evento, datos }], cancelar, aprobaciones: Map }
 let siguienteChat = 1;
+
+const SEMBRAR_CHATS = Number(process.env.SEMBRAR_CHATS ?? 0);
+const SEMBRAR_MENSAJES = Number(process.env.SEMBRAR_MENSAJES ?? 4);
+const textoDeRelleno = (i) => `Respuesta ${i}: ` + "Las ventas del trimestre suben un 4 % en el norte y bajan un 2 % en el sur; el informe detalla cada región. ".repeat(3);
+for (let n = 1; n <= SEMBRAR_CHATS; n++) {
+  const id = `chat${siguienteChat++}`;
+  const total = n === 1 ? SEMBRAR_MENSAJES : 4;
+  const mensajes = Array.from({ length: total }, (_, i) => ({
+    seq: i + 1,
+    rol: i % 2 ? "assistant" : "user",
+    run_id: `oid-prueba.semilla${n}x${Math.floor(i / 2)}`,
+    partes: [{ tipo: "texto", texto: i % 2 ? textoDeRelleno(i) : `Pregunta ${i}: ¿cómo van las ventas por región?` }],
+  }));
+  chats.set(id, { id, titulo: `Chat sembrado ${n}`, estado: "regular", actualizado: Date.now() - n * 60_000, mensajes, activa: null });
+}
 
 function emite(run, evento, datos) {
   const id = String(run.eventos.length + 1);
@@ -153,7 +171,10 @@ createServer((req, res) => {
     if (chat && p.length === 2 && req.method === "GET") { const { mensajes, ...c } = chat; return responde(200, c); }
     if (chat && p.length === 2 && req.method === "PATCH") { Object.assign(chat, json); return responde(200, {}); }
     if (chat && p.length === 2 && req.method === "DELETE") { chats.delete(chat.id); return responde(204); }
-    if (chat && p[2] === "messages") return responde(200, { mensajes: chat.mensajes, activa: chat.activa });
+    if (chat && p[2] === "messages") {
+      const despues = Number(url.searchParams.get("after") ?? 0);
+      return responde(200, { mensajes: chat.mensajes.filter((m) => m.seq > despues), activa: chat.activa });
+    }
     if (chat && p[2] === "runs" && req.method === "POST") {
       if (chat.activa) return responde(409, { error: "ya hay una ejecución en marcha en este chat", activa: chat.activa });
       const runId = json.run_id;

@@ -10,6 +10,7 @@ import {
   type ThreadMessageLike,
 } from "@assistant-ui/react-native";
 import { leerSSE, type EventoSSE } from "./sse";
+import { cola as colaGuardada, guardarMensajes, hayCache, mensajesGuardados, quitarChat } from "./cache";
 
 export const BASE = process.env.EXPO_PUBLIC_SERVIDOR ?? "http://localhost:8799";
 
@@ -17,14 +18,27 @@ export const BASE = process.env.EXPO_PUBLIC_SERVIDOR ?? "http://localhost:8799";
 export const informa = (x: Record<string, unknown>) =>
   fetch(`${BASE}/resultado`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plataforma: Platform.OS, ...x }) }).catch(() => {});
 
-// Caché local de la cola. En web, localStorage (la app de verdad usaría IndexedDB); en iOS iría a la SQLite
-// cifrada, que esta prueba no monta.
-const memoria = new Map<string, string>();
+// La cola guardada en el dispositivo: en iOS, en la caché SQLite (`cache.ts`); en web, en localStorage.
 const almacen = {
-  leer: (k: string) => (Platform.OS === "web" ? globalThis.localStorage?.getItem(k) : memoria.get(k)) ?? null,
-  escribir: (k: string, v: string) => (Platform.OS === "web" ? globalThis.localStorage?.setItem(k, v) : memoria.set(k, v)),
-  borrar: (k: string) => (Platform.OS === "web" ? globalThis.localStorage?.removeItem(k) : memoria.delete(k)),
+  leer: (chat: string) => (hayCache ? colaGuardada.leer(chat) : globalThis.localStorage?.getItem(`cola:${chat}`) ?? null),
+  escribir: (chat: string, v: string) => (hayCache ? colaGuardada.escribir(chat, v) : globalThis.localStorage?.setItem(`cola:${chat}`, v)),
+  borrar: (chat: string) => (hayCache ? colaGuardada.borrar(chat) : globalThis.localStorage?.removeItem(`cola:${chat}`)),
 };
+
+// Un mensaje consolidado del backend, como lo pinta assistant-ui.
+const convertir = (m: any): Mensaje => ({
+  id: `${m.rol === "user" ? "u" : "a"}_${m.run_id}`,
+  role: m.rol,
+  status: m.rol === "assistant" ? { type: "complete", reason: "stop" } : undefined,
+  content: m.partes.map((p: any): Parte =>
+    p.tipo === "texto"
+      ? { type: "text", text: p.texto }
+      : {
+          type: "tool-call", toolCallId: p.id, toolName: p.nombre, args: { etiqueta: p.etiqueta, resumen: p.resumen }, result: { resumen: p.resultado ?? p.aprobacion }, isError: p.estado === "error",
+          ...(p.aprobacion && { approval: { id: `h_${p.id}`, ...(p.aprobacion === "caducada" || p.aprobacion === "cancelada" ? { resolution: p.aprobacion === "caducada" ? "expired" : "cancelled" } : { approved: p.aprobacion === "aprobada" }) } }),
+        },
+  ),
+});
 
 type Parte = Exclude<ThreadMessageLike["content"], string>[number];
 type LlamadaHerramienta = Extract<Parte, { type: "tool-call" }>;
@@ -74,30 +88,40 @@ export class Chat {
   private guardarCola() {
     if (!this.remoteId) return;
     const textos = [...this.cola.adapter.steerItems, ...this.cola.adapter.items].map((i) => i.prompt);
-    if (textos.length) almacen.escribir(`cola:${this.remoteId}`, JSON.stringify(textos));
-    else almacen.borrar(`cola:${this.remoteId}`);
+    if (textos.length) almacen.escribir(this.remoteId, JSON.stringify(textos));
+    else almacen.borrar(this.remoteId);
   }
 
-  // Al abrir el chat: el historial del backend, la ejecución en marcha si la hay y la cola guardada.
+  // Al abrir el chat: primero lo guardado en la caché (iOS), después lo nuevo del backend (`after=<seq>`), la
+  // ejecución en marcha si la hay y la cola guardada.
   async abrir(remoteId: string) {
     this.remoteId = remoteId;
     if (this.abierto) return;
     this.abierto = true;
-    const r = await fetch(`${BASE}/chats/${remoteId}/messages`).then((r) => r.json());
+    const t0 = performance.now();
+    const guardados = mensajesGuardados(remoteId);
+    if (guardados.mensajes.length && !this.runId) {
+      this.mensajes = guardados.mensajes.map(convertir);
+      this.cambia();
+    }
+    const tPintado = performance.now() - t0;
+    const despues = guardados.mensajes.at(-1)?.seq ?? 0;
+    const t1 = performance.now();
+    const resp = await fetch(`${BASE}/chats/${remoteId}/messages?after=${despues}`);
+    if (resp.status === 404) {
+      // se borró en otro dispositivo o caducó: fuera de la caché
+      quitarChat(remoteId);
+      return void informa({ tipo: "chat_404", chat: remoteId });
+    }
+    const r = await resp.json();
+    const tRed = performance.now() - t1;
+    const msGuardar = guardarMensajes(remoteId, r.mensajes);
+    informa({
+      tipo: "chat_abierto", chat: remoteId, cache: hayCache, deCache: guardados.mensajes.length, msLeerCache: guardados.ms,
+      msPintarDesdeCache: Math.round(tPintado), nuevos: r.mensajes.length, msRed: Math.round(tRed), msGuardar,
+    });
     if (!this.runId) {
-      this.mensajes = r.mensajes.map((m: any): Mensaje => ({
-        id: `${m.rol === "user" ? "u" : "a"}_${m.run_id}`,
-        role: m.rol,
-        status: m.rol === "assistant" ? { type: "complete", reason: "stop" } : undefined,
-        content: m.partes.map((p: any): Parte =>
-          p.tipo === "texto"
-            ? { type: "text", text: p.texto }
-            : {
-                type: "tool-call", toolCallId: p.id, toolName: p.nombre, args: { etiqueta: p.etiqueta, resumen: p.resumen }, result: { resumen: p.resultado ?? p.aprobacion }, isError: p.estado === "error",
-                ...(p.aprobacion && { approval: { id: `h_${p.id}`, ...(p.aprobacion === "caducada" || p.aprobacion === "cancelada" ? { resolution: p.aprobacion === "caducada" ? "expired" : "cancelled" } : { approved: p.aprobacion === "aprobada" }) } }),
-              },
-        ),
-      }));
+      this.mensajes = [...this.mensajes, ...r.mensajes.map(convertir)];
       if (r.activa) {
         // ejecución en marcha (la app se cerró o se recargó): se retoma desde el principio de sus eventos
         this.cola.notifyBusy();
@@ -107,7 +131,7 @@ export class Chat {
       }
       this.cambia({ ejecutando: !!r.activa });
     }
-    const guardada = almacen.leer(`cola:${remoteId}`);
+    const guardada = almacen.leer(remoteId);
     if (guardada) {
       const textos: string[] = JSON.parse(guardada);
       informa({ tipo: "cola_restaurada", chat: remoteId, textos });

@@ -6,6 +6,8 @@
     "@assistant-ui/react-native": "0.1.51",
     "assistant-stream": "0.3.55",
     "expo": "~58.0.22",
+    "expo-file-system": "~58.0.13",
+    "expo-sqlite": "~58.0.15",
     "expo-status-bar": "~58.0.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",

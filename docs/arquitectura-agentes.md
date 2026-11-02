@@ -21,6 +21,7 @@ Piezas: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate
 - [MCP Hub](#hub)
 - [Identidad y permisos](#identidad)
 - [Operación](#operacion)
+- [Trazas de punta a punta](#trazas)
 - [Construcción y despliegue](#construccion)
 - [Entorno de pruebas](#pruebas)
 - [Migración](#migracion)
@@ -183,9 +184,9 @@ sequenceDiagram
 
 | VPC | Qué contiene | Endpoints | Salida | DNS Firewall permite | Quién llega |
 |---|---|---|---|---|---|
-| **Servicios** | Backend (`api`), `admin`, panel, app web, NLB interno y las Lambdas | Los servicios de AWS que usan: DynamoDB y S3 (gateway), AgentCore (plano de datos para `InvokeAgentRuntime` y `StopRuntimeSession`, y control), Bedrock (títulos), STS (`AssumeRole` de `api`), IAM (`PutRolePolicy`), KMS, Secrets Manager, SQS, Scheduler, Logs… | Transit Gateway solo hacia la VPC de salida de la empresa (túnel a Netskope): Entra, APNs, Web Push. En pruebas, un NAT Gateway | AWS, Entra (con Graph), APNs, Web Push | La iDMZ por PrivateLink; la VPC de integraciones por PrivateLink, solo `/internal/obo` |
+| **Servicios** | Backend (`api`), `admin`, panel, app web, NLB interno y las Lambdas | Los servicios de AWS que usan: DynamoDB y S3 (gateway), AgentCore (plano de datos para `InvokeAgentRuntime` y `StopRuntimeSession`, y control), Bedrock (títulos), STS (`AssumeRole` de `api`), IAM (`PutRolePolicy`), KMS, Secrets Manager, SQS, Scheduler, Logs, X-Ray… | Transit Gateway solo hacia la VPC de salida de la empresa (túnel a Netskope): Entra, APNs, Web Push. En pruebas, un NAT Gateway | AWS, Entra (con Graph), APNs, Web Push | La iDMZ por PrivateLink; la VPC de integraciones por PrivateLink, solo `/internal/obo` |
 | **Agentes** | Solo los runtimes del kernel | `bedrock-runtime`, AgentCore (Code Interpreter), el MCP Hub (PrivateLink), DynamoDB y S3 (gateway, que también deja pasar el bucket de capas de ECR), Logs, X-Ray, ECR (`api` y `dkr`) | Ninguna | `*.us-east-1.amazonaws.com` (el comodín solo vale al principio), los nombres sin región que se usen, el hub y los CNAME intermedios de todos ellos (las reglas inspeccionan la cadena por defecto); todo lo demás bloqueado, y si falla, cerrado | Nadie por red: `api` llama a la API de AgentCore |
-| **Integraciones MCP** | MCP Hub, MCP propios y Cloud Map | `bedrock-agent-runtime` (Knowledge Bases), DynamoDB (tabla principal: catálogo y versiones en lectura, aprobaciones en lectura y marcado; tabla de auditoría bajo `AUDIT#hub#`), KMS (verificar el token de ejecución), Secrets Manager, Logs y métricas de CloudWatch; y los que necesiten Fargate y Service Connect (`ecs`, `ecs-agent`, `ecs-telemetry`, ECR y S3), salvo que salgan por la red corporativa (por verificar) | Red corporativa (Transit Gateway, Direct Connect o VPN) y, por ella, Netskope | AWS, Entra y los dominios internos | El kernel por PrivateLink; los MCP externos, por la red corporativa |
+| **Integraciones MCP** | MCP Hub, MCP propios y Cloud Map | `bedrock-agent-runtime` (Knowledge Bases), DynamoDB (tabla principal: catálogo y versiones en lectura, aprobaciones en lectura y marcado; tabla de auditoría bajo `AUDIT#hub#`), KMS (verificar el token de ejecución), Secrets Manager, Logs, métricas de CloudWatch y X-Ray; y los que necesiten Fargate y Service Connect (`ecs`, `ecs-agent`, `ecs-telemetry`, ECR y S3), salvo que salgan por la red corporativa (por verificar) | Red corporativa (Transit Gateway, Direct Connect o VPN) y, por ella, Netskope | AWS, Entra y los dominios internos | El kernel por PrivateLink; los MCP externos, por la red corporativa |
 | **Code Interpreter** | Las sesiones de Code Interpreter | Ninguno | Ninguna; DNS desactivado | — | AgentCore por su plano de control (ficheros por la API) |
 
 <a id="app"></a>
@@ -633,7 +634,7 @@ Con cualquier `fin`, `cerrar(run_id)` cierra la ejecución: guarda el mensaje co
 
 | Dato | Quién | Condición |
 |---|---|---|
-| Registro (`estado = pendiente`, usuario, agente, versión, chat, marca `abierta`) | `api` (mensaje o tarea) | Transacción con `ejecucion_activa = run_id` en el chat (`attribute_not_exists`) |
+| Registro (`estado = pendiente`, usuario, agente, versión, chat, `traceparent`, marca `abierta`) | `api` (mensaje o tarea) | Transacción con `ejecucion_activa = run_id` en el chat (`attribute_not_exists`) |
 | `estado = en_marcha` | Kernel | Desde `pendiente` |
 | `ultimo_latido` (cada 30 s) | Kernel | Solo si `estado = en_marcha`; si falla, el kernel se para |
 | Eventos `EVT#000001…`, uso, ficheros, aprobaciones pendientes | Kernel | Sin condición (lotes de ~250 ms) |
@@ -1235,54 +1236,131 @@ Ninguna llama a otra Lambda; se coordinan por DynamoDB y por la cola de borrados
 - **Un usuario que se va** no necesita ningún borrado: Entra le cierra la entrada al momento (sin login nuevo, token de una hora, OBO rechazado) o un administrador lo da de baja desde el panel; sus tareas programadas se pausan, su memoria se borra al darlo de baja (no caduca por edad) y todo lo demás caduca por estos TTL. Solo quedan la auditoría y los contadores, con el `oid`.
 - **Copias de seguridad**: con recuperación a un momento dado (PITR), lo borrado sigue recuperable durante su ventana (hasta 35 días). Si algún dato debe desaparecer antes, hay que tenerlo en cuenta.
 
-### Trazas de punta a punta
+<a id="trazas"></a>
 
-Para un mensaje concreto de un usuario se ve todo lo que pasó desde que pulsó "enviar" hasta la respuesta: por qué servicios pasó, cuánto tardó cada paso y dónde falló.
+## Trazas de punta a punta
 
-### Traza y tramo
+El objetivo: abrir un mensaje que un usuario envió desde la app y ver, en una sola pantalla, todo lo que pasó con él. Desde que pulsó "enviar" hasta que la app recibió `fin` y le llegó el push, pasando por API Gateway, `api`, el kernel, cada llamada al modelo, cada herramienta, el hub, los MCP y el cierre. Con cuánto tardó cada paso, cuál falló y por qué. Sirve para dar soporte ("mi mensaje tardó un minuto"), para encontrar cuellos de botella ("¿dónde se va el tiempo en el agente Ventas?") y para depurar fallos que cruzan piezas ("la herramienta devolvió error: ¿fue el hub, el OBO o el MCP?").
 
-- **Traza**: el recorrido completo de un mensaje, con un identificador único (`trace_id`).
-- **Tramo** (span): cada paso dentro del recorrido ("el backend valida", "llamada al modelo", "herramienta buscar_documentos"), con el `trace_id` de su traza, su duración y si fue bien o mal.
-- Para que todos los tramos acaben en la misma traza, cada servicio pasa el identificador al siguiente en la cabecera estándar W3C `traceparent`: `00-<trace_id>-<tramo padre>-01`.
+Cómo: todas nuestras piezas llevan OpenTelemetry, el estándar abierto de trazas, y envían lo que miden a AWS X-Ray, con CloudWatch Transaction Search activado. Los servicios gestionados que no ejecutan nuestro código (Bedrock, DynamoDB, S3, Code Interpreter) no envían nada propio, pero aparecen igual: quien los llama registra la llamada como un paso suyo, con su duración y su resultado.
+
+### Conceptos
+
+- **Traza**: el recorrido completo de un mensaje. Tiene un identificador único, el `trace_id`. Todo lo que se registra con ese id forma parte de la misma traza, venga de la pieza que venga.
+- **Tramo** (span): un paso dentro de la traza ("`api` crea la ejecución", "llamada al modelo", "herramienta `buscar_documentos`"). Lleva el `trace_id`, su propio id, el id de su **padre** (el tramo dentro del cual ocurre), la hora de inicio y fin, si fue bien o mal, y atributos (el `run_id`, el agente, la versión…). Con los padres, los tramos forman un árbol: eso es lo que se ve como cascada.
+- **Propagación**: para que la pieza siguiente cuelgue sus tramos de la misma traza, la anterior le pasa el `trace_id` y el id del tramo padre. En una llamada HTTP va en una cabecera; donde no hay llamada HTTP (una cola, un registro de DynamoDB que dispara una Lambda) tiene que ir en el propio dato. Si una pieza no recibe ese contexto, empieza una traza nueva y el recorrido queda partido en dos.
+- **Exportar**: cada pieza junta sus tramos terminados y los envía en lotes al endpoint OTLP de X-Ray (`xray.{región}.amazonaws.com/v1/traces`). X-Ray los junta por `trace_id`, aunque lleguen de piezas y momentos distintos.
+
+### Una traza por mensaje
+
+- **Traza = ejecución**. Un mensaje de la app (o un disparo de una tarea programada) crea una ejecución, y esa ejecución es una traza. Encaja con cómo funciona la plataforma: `api` responde 202 enseguida y el trabajo sigue en el kernel, en la Lambda de Streams y en el push. Si la traza fuera la petición HTTP, se acabaría en el 202 y lo importante quedaría fuera. Por eso todo lo que le pasa a la ejecución, también lo que ocurre minutos después, cuelga de la misma traza.
+- **El `trace_id` lo crea quien crea el `run_id`**: la app en un chat, el consumidor de tareas de `api` en una tarea, `admin` en un chat de prueba. Así la traza empieza en el origen real del mensaje (la app mide también lo que tarda la red y la puerta de entrada) y no en el primer servidor.
+- **Formato compatible con X-Ray**: 32 caracteres hexadecimales; los 8 primeros son la hora en segundos desde 1970 y los 24 restantes, aleatorios. Es un id W3C válido, y además el que X-Ray espera: X-Ray puede rechazar un id sin esa hora, y los generadores de id de AWS para OpenTelemetry los hacen así (`@opentelemetry/id-generator-aws-xray` en JavaScript, `AwsXRayIdGenerator` en Python).
+- **Dos cabeceras con los mismos ids**. OpenTelemetry usa `traceparent` (estándar W3C: `00-{trace_id}-{tramo padre}-01`). API Gateway y AgentCore documentan `X-Amzn-Trace-Id` (`Root=1-{8}-{24};Parent={tramo padre};Sampled=1`), que es la misma información en el formato de X-Ray. Se envían las dos para que cada pieza lea la que entiende. En nuestro código, los SDK se configuran con los propagadores `tracecontext`, `xray` y `baggage`: leen la que llegue y escriben las dos.
+- **Se guarda todo** (`Sampled=1` desde el origen, y nadie vuelve a decidir). Muestrear, guardar solo una parte de las trazas, abarata, pero tiene un problema: la decisión se toma al empezar, cuando aún no se sabe si el mensaje va a fallar o a ser lento, que son justo los que interesan. Guardar siempre los de error o lentos exige muestreo por cola: un colector central que reciba la traza entera, espere a que acabe y entonces decida. No lo tenemos, porque el kernel exporta directamente desde AgentCore, y montarlo sería otra pieza que operar y otro camino de red desde la VPC de agentes. Con Transaction Search guardar todos los tramos es razonable (se paga por volumen ingerido como logs), y el volumen se controla quitando ruido (ver "Lo que no genera tramos").
+
+### El contexto en los saltos asíncronos
+
+Donde no hay una petición HTTP que lleve la cabecera, el contexto viaja en el dato. Sin esto, la traza se corta justo donde la plataforma es asíncrona:
+
+- **El registro de la ejecución guarda `traceparent`** (`RUN#{run_id}`). Lo escribe `api` al crearlo, en la misma transacción. Lo leen la vigilante, la Lambda de borrado y `cerrar(run_id)`, que ya leen ese registro por otras razones: no cuesta lecturas nuevas.
+- **`fin` lleva `traceparent`**. Quien escribe `fin` (el kernel, la vigilante, `api` o la Lambda de borrado) copia el del registro. La Lambda de Streams lo lee del propio registro del stream, que trae el elemento `fin` completo, sin otra lectura a DynamoDB.
+- **Cola de borrados**: `api` pone el `traceparent` de la ejecución activa (si la hay) en los atributos del mensaje de SQS, y la Lambda de borrado lo lee de ahí.
+- **Las tareas empiezan traza en el consumidor**: el disparo lo encola el Scheduler, que no lleva contexto de traza; la traza nace cuando el consumidor de `api` lo recibe.
+- **La Lambda de coste queda fuera de la traza**: el registro de invocaciones de Bedrock no trae contexto de traza, solo el nombre de sesión de STS (el `run_id`). Sus logs y `COSTE#{run_id}` llevan ese `run_id`, que basta para cruzarlo con la traza si hace falta. Meterla en la traza exigiría leer el registro de la ejecución en cada llamada al modelo solo para eso.
+
+```mermaid
+flowchart LR
+  App -- "traceparent + X-Amzn-Trace-Id" --> GW[API Gateway]
+  GW -- cabeceras --> API[api]
+  API -- "InvokeAgentRuntime (cabeceras)" --> K[Kernel]
+  K -- "cabeceras (httpx)" --> H[MCP Hub] -- cabeceras --> M[MCP]
+  API -- "traceparent en RUN#" --> D[(DynamoDB)]
+  K -- "traceparent en fin" --> D
+  D -- "Streams (fin con traceparent)" --> S[Lambda de Streams]
+  S -- "/internal/push (cabeceras)" --> API
+  D -. "RUN# (traceparent)" .-> V[Vigilante]
+  API -- "atributo SQS" --> B[Lambda de borrado]
+```
 
 ### El recorrido
 
-- **App**: al enviar, crea el `trace_id` y lo manda en `traceparent`.
-- **Backend** (OpenTelemetry para Node): abre sus tramos (comprobar acceso, DynamoDB, STS, firma) y pasa el `traceparent` a `InvokeAgentRuntime`, que acepta `traceparent`, `tracestate` y `baggage`.
-- **Kernel** (ADOT): continúa la traza, con un tramo por llamada al modelo y por herramienta, y la pasa a Bedrock, al MCP Hub (en cada llamada) y a Code Interpreter (al abrir sesión).
-- **MCP Hub y MCP**: el hub continúa la traza (OpenTelemetry para Node) con sus tramos (`allow`, aprobación, OBO) y la pasa al MCP de destino.
-- **CloudWatch Transaction Search** junta todos los tramos por `trace_id`.
-- **Tareas programadas**: no hay app que la inicie; el consumidor de la cola de tareas en `api` abre una traza nueva en cada disparo.
+1. **App**. Al pulsar "enviar" genera el `run_id` y el `trace_id`, abre el tramo raíz `mensaje` y, dentro, el tramo de cliente del `POST /chats/{id}/runs`, que lleva las dos cabeceras. El tramo raíz mide lo que vive el usuario: termina cuando la app recibe `fin` por el SSE, o cuando el usuario sale del chat o la app pasa a segundo plano (entonces con el atributo `abandonado`, y la respuesta le llegará por push).
+2. **API Gateway (iDMZ)**. Con el trazado activo en la etapa, continúa la traza que trae `X-Amzn-Trace-Id` y añade su segmento: cuánto tarda la puerta y cuánto el autorizador. Reenvía las cabeceras a `api`. Ese segmento queda en la cuenta iDMZ; se ve junto al resto gracias a la observabilidad entre cuentas de CloudWatch, con la cuenta de la plataforma como cuenta de monitorización.
+3. **`api`**. Tramo de servidor del `POST`, con sus hijos: la transacción de DynamoDB que crea la ejecución (y guarda `traceparent`), STS, la firma con KMS y `InvokeAgentRuntime`. Esta última lleva las dos cabeceras: la API acepta `traceparent`, `tracestate` y `baggage` (comprobado en botocore), y AgentCore documenta `X-Amzn-Trace-Id`.
+4. **AgentCore y kernel**. Con las trazas del runtime activadas (`tracingEnabled`), AgentCore añade su tramo de invocación y el kernel continúa la traza con ADOT (la distribución de OpenTelemetry de AWS, que AgentCore Runtime integra). El kernel abre el tramo `ejecución`, que dura más que la respuesta 202, y dentro aparecen los que emite Strands (una llamada al modelo por vuelta, cada herramienta, cada subagente o nodo de grafo) y los suyos (activar una skill, el sync con S3, cada ida y vuelta con Code Interpreter).
+5. **MCP Hub y MCP**. El cliente MCP del kernel va sobre `httpx`, que ADOT instrumenta, así que cada llamada lleva las cabeceras. El hub continúa la traza con sus tramos (`allow`, aprobación, OBO, y este último llama a `/internal/obo` de `api`, que también continúa) y la pasa al MCP de destino. Un MCP externo recibe las cabeceras; si no las usa, lo que se ve de él es el tramo de cliente del hub: cuánto tardó y qué devolvió.
+6. **SSE, cancelar y aprobar**. El `GET /runs/{id}/events`, el `POST /runs/{id}/cancel` y la decisión de una aprobación salen de la app con la misma traza, como hijos del tramo raíz. El SSE es un tramo por conexión, con eventos dentro del tramo (primer evento, primer texto, `fin` enviado) y el número de eventos como atributo; una reconexión es otro tramo. Así se ve el tiempo hasta el primer texto, que es lo que el usuario percibe como "lento".
+7. **Cierre y push**. La Lambda de Streams abre `cerrar` como hijo del tramo raíz, con el `traceparent` de `fin`; de ahí cuelgan `/internal/push` en `api` y el envío por APNs o Web Push. Si quien cierra es `api` (el siguiente mensaje llegó antes) o la vigilante, el tramo `cerrar` es el suyo, en la misma traza.
+8. **Vigilante y borrado**. Cada pasada de la vigilante es su propia traza (no pertenece a ningún mensaje); por cada ejecución que toca abre además un tramo en la traza de esa ejecución, con el `traceparent` del registro, y enlaza los dos (los *links* de OpenTelemetry: una referencia entre tramos de trazas distintas). La Lambda de borrado hace lo mismo con el contexto del mensaje de la cola, si lo trae.
+9. **Tareas y chats de prueba**. Sin app, el tramo raíz es `tarea` (lo abre el consumidor de `api` al recibir el disparo) o `prueba` (lo abre `admin` y pasa la traza a `/internal/lanzar`); el resto del recorrido es igual.
 
-### Instrumentación por componente
+### Lo que no genera tramos
 
-- **Kernel** (Python): ADOT (AWS Distro for OpenTelemetry), que AgentCore Runtime ya integra; Strands emite sus tramos de modelo y herramientas. Las trazas del runtime tienen que estar activadas (`tracingEnabled` en el `Runtime` de CDK): sin ellas, la traza del kernel queda separada de la de `api`. Son las mismas trazas que lee Evaluations.
-- **Backend, `admin`, MCP Hub y MCP** (TypeScript en Fargate): SDK de OpenTelemetry para Node con instrumentación automática de HTTP, Fastify y el AWS SDK, más tramos propios (comprobar acceso, `allow`, aprobación, OBO). Exportan por OTLP a CloudWatch (X-Ray y Transaction Search), a través de un colector ADOT como contenedor auxiliar en cada tarea de Fargate.
-- **Lambdas** (autorizador, Streams, coste, vigilante, borrado y, en pruebas, emergencia): la capa de ADOT para Lambda.
-- **Propagación**: contexto W3C (`traceparent`, `baggage`) en todas las llamadas HTTP y en `InvokeAgentRuntime`; los atributos de negocio (ejecución, chat, agente, versión) se añaden en cada tramo.
-- **Coste**: muestreo del 100 % en pruebas; en producción, muestreo por cabecera con las ejecuciones con error o lentas siempre guardadas.
+Guardar todo solo es razonable si "todo" son los pasos que importan y no cada vuelta de un bucle:
 
-### Para buscar y dar soporte
+- **Bucles frecuentes, sin tramo propio**: las escrituras de eventos del kernel (cada ~250 ms), el latido (cada 30 s) y las consultas del SSE a DynamoDB (cada 300 ms a 1 s). Un mensaje de un minuto generaría cientos de tramos iguales que no dicen nada. Esos clientes van con la instrumentación desactivada, y lo que importa de ellos va como atributo o evento del tramo que los contiene: eventos escritos, eventos enviados, reintentos, errores.
+- **Comprobaciones de salud** (`/ping` del kernel, las de los balanceadores): fuera.
+- **Contenido**: los tramos de la app, de `api` y del hub no llevan texto de mensajes, solo ids, tamaños y resultados. Los del kernel sí llevan prompts y respuestas: Strands sigue las convenciones de OpenTelemetry para IA generativa, y son los que lee Evaluations para puntuar. Por eso el acceso a los tramos es restringido (ver "Dónde se ven").
 
-- **Identificadores de negocio** en cada tramo (y en el `baggage`, para que lleguen a todos los servicios): ejecución, chat, agente y versión. Se puede buscar "la ejecución 3f9c…" o "las ejecuciones lentas del agente Ventas v4" sin conocer el `trace_id`.
-- **Logs enlazados**: todos los componentes escriben logs en JSON con el `trace_id` y el id de la ejecución; de una traza se salta a sus logs y de un error a su traza.
-- **Código de soporte** en el menú de cada mensaje de la app (el id de la ejecución).
-- **Evaluations** lee estas mismas trazas del kernel para puntuar las respuestas: no es un sistema aparte.
+### Instrumentación por pieza
 
-Ejemplo de lo que se ve al abrir una traza:
+| Pieza | Cómo | Exporta |
+|---|---|---|
+| App Expo (iOS y web) | API y SDK de trazas de OpenTelemetry para JavaScript, con los tramos a mano (raíz, `POST`, SSE) y el generador de id de X-Ray | OTLP en JSON a `POST /telemetry` de `api`, en lotes |
+| API Gateway y autorizador (iDMZ) | Trazado activo en la etapa; capa de ADOT en el autorizador | X-Ray de la cuenta iDMZ |
+| `api`, `admin`, MCP Hub y MCP propios | SDK de OpenTelemetry para Node con instrumentación automática de HTTP, Fastify y el AWS SDK, más tramos propios (comprobar acceso, `allow`, aprobación, OBO) | OTLP a un colector ADOT como contenedor auxiliar en cada tarea de Fargate, que firma con SigV4 y envía a `xray.{región}.amazonaws.com/v1/traces` |
+| Panel (Next.js) | SDK de OpenTelemetry para Node en el servidor | Igual que `admin` |
+| Kernel | ADOT (que AgentCore Runtime integra) y los tramos de Strands; trazas del runtime activadas | Directo al endpoint OTLP de X-Ray, con el rol de ejecución del runtime |
+| Lambdas (Streams, coste, vigilante, borrado) | Capa de ADOT para Lambda | Directo al endpoint OTLP de X-Ray, con el rol de cada Lambda |
+
+- **Por qué la app pasa por `api`**: el endpoint OTLP de X-Ray exige SigV4 (credenciales de AWS) o una clave de API, y ninguna de las dos puede ir dentro de una app que cualquiera puede descompilar. `POST /telemetry` es una ruta normal de la API: acepta solo con el JWT del usuario, comprueba que el `run_id` de cada tramo empieza por su `oid` (no puede escribir tramos en la traza de otro), limita tamaño y frecuencia, pone `enduser.id` = `oid` (sobrescribiendo lo que traiga) y reenvía al colector de su propia tarea.
+- **Por qué no CloudWatch RUM**: es el producto de AWS para telemetría de cliente, pero sus SDK son para web y para iOS y Android nativos, no para una app Expo en JavaScript.
+- **Por qué un colector en Fargate y no en el kernel ni en las Lambdas**: en Fargate el colector auxiliar descarga a los servicios (los tramos salen en segundo plano) y es donde se firma; el kernel y las Lambdas ya traen su exportador (AgentCore y la capa de ADOT) y firman con su propio rol.
+
+### Configuración (CDK)
+
+- **Transaction Search activado**. Es requisito del endpoint OTLP de X-Ray y de las trazas de AgentCore. Los tramos se guardan como logs en el grupo `aws/spans` (`UpdateTraceSegmentDestination`, con su política de recurso). Todos los tramos quedan guardados y se pueden buscar por cualquier atributo; además, un porcentaje bajo se indexa como resumen de traza de X-Ray (`UpdateIndexingRule`), que es lo que alimenta las analíticas propias de X-Ray. Es configuración de toda la cuenta y región: la fija CDK con un recurso personalizado, como el registro de invocaciones de Bedrock, y nadie más la toca.
+- **Endpoints de X-Ray y de Logs** en las tres VPC con código nuestro: agentes, servicios e integraciones. Sin el de integraciones, el hub y los MCP no podrían enviar sus tramos y la traza se cortaría en el kernel.
+- **Observabilidad entre cuentas**: la cuenta iDMZ comparte sus trazas con la de la plataforma (CloudWatch cross-account observability), para ver el segmento de API Gateway dentro de la misma traza.
+- **`aws/spans`**: retención de 90 días, como los logs, y cifrado con nuestra CMK (por verificar que el grupo lo admite).
+
+### Dónde se ven
+
+- **Buscar**: CloudWatch, Transaction Search. Se busca por cualquier atributo: el `run_id` (el código de soporte que la app muestra en el menú de cada mensaje), el chat, el agente y su versión, el usuario, los errores o la duración ("las ejecuciones de más de 30 s del agente Ventas v4 esta semana").
+- **Ver una traza**: el detalle de traza de CloudWatch, con la cascada de tramos de punta a punta (como el ejemplo de abajo) y el mapa de servicios de esa traza. De cada tramo se salta a sus logs, que llevan el `trace_id` y el `run_id`, y de un error en los logs, a su traza.
+- **Ver el agente**: la vista de AgentCore de CloudWatch (GenAI Observability), con las sesiones, las llamadas al modelo y a herramientas, los tokens y las latencias del kernel. Es la vista para estudiar cómo trabaja un agente; la traza de punta a punta, para ver dónde se fue el tiempo o dónde falló un mensaje concreto.
+- **Desde el panel**: el detalle de una ejecución tiene un enlace "Ver traza" que abre esa traza en CloudWatch (el panel saca el `trace_id` del `traceparent` del registro). El panel no pinta trazas propias: la consola ya lo hace bien, y los tramos del kernel llevan prompts que no deben copiarse a otro sitio.
+- **Quién**: un rol de soporte con lectura de `aws/spans`, X-Ray y los grupos de logs. Los tramos y logs con prompts, solo para quien lo necesite.
+- **Evaluations** lee los mismos tramos del kernel para puntuar las respuestas: no es un sistema aparte.
+
+### Ejemplo
+
+Lo que se ve al abrir la traza de un mensaje:
 
 ```
-mensaje 7f3a… (usuario X, agente Ventas v4)                  total 20,4 s
-├─ api: comprobar acceso y presupuesto · crear · STS · firma       90 ms
-├─ api: InvokeAgentRuntime (arranque en frío de la microVM del chat)  2,1 s
-└─ kernel: ejecución                                          18,2 s
-   ├─ modelo (Claude, 1.ª vuelta)                               2,1 s
-   ├─ herramienta buscar_documentos                             0,9 s
-   │  └─ MCP Hub (allow, identidad) → mcp-documentos             80 ms
-   ├─ modelo (2.ª vuelta)                                       3,4 s
-   ├─ herramienta código → Code Interpreter                     9,8 s   ← aquí se fue el tiempo
-   └─ modelo (respuesta final)                                  1,9 s
+mensaje 7f3a… (app · usuario X · agente Ventas v4)                total 21,0 s
+├─ app: POST /chats/{id}/runs                                     2,3 s
+│  └─ API Gateway (autorizador 15 ms)                             2,3 s
+│     └─ api: POST /chats/{id}/runs                               2,2 s
+│        ├─ DynamoDB: crear ejecución · STS · KMS                   90 ms
+│        └─ InvokeAgentRuntime (arranque en frío de la microVM)     2,1 s
+│           └─ kernel: ejecución                                  18,2 s
+│              ├─ modelo (1.ª vuelta)                              2,1 s
+│              ├─ herramienta buscar_documentos                    0,9 s
+│              │  └─ MCP Hub (allow, identidad) → mcp-documentos     80 ms
+│              ├─ modelo (2.ª vuelta)                              3,4 s
+│              ├─ herramienta código → Code Interpreter            9,8 s   ← aquí se fue el tiempo
+│              └─ modelo (respuesta final)                         1,9 s
+├─ app: SSE (primer texto a los 4,6 s · 212 eventos)              18,6 s
+│  └─ api: GET /runs/{id}/events                                 18,5 s
+└─ Lambda de Streams: cerrar                                       120 ms
+   └─ api: /internal/push → APNs                                   60 ms
 ```
+
+Se lee de arriba abajo: el usuario esperó 21 s; 2,3 s fueron la entrada y el arranque en frío de la microVM; el primer texto le llegó a los 4,6 s; y la mitad del tiempo se fue en una ejecución de código en Code Interpreter. El tramo `kernel: ejecución` dura más que su padre (`InvokeAgentRuntime`) porque `api` recibe el 202 y el kernel sigue trabajando: es normal en esta traza.
+
+Lo que queda por comprobar de punta a punta está en la fila "Trazas, idempotencia y latencia del arranque" de [Por verificar](#verificar).
 
 <a id="construccion"></a>
 
@@ -1294,7 +1372,7 @@ mensaje 7f3a… (usuario X, agente Ventas v4)                  total 20,4 s
 - **`api`** (el backend): chats, ejecuciones (las crea y las lanza con `lanzar()`) y SSE, ficheros, `/me`, tareas programadas del usuario, el OBO, las rutas internas (`/internal/obo`, `/internal/push`, `/internal/lanzar` para los chats de prueba y las evaluaciones de `admin`) y el envío de push. Escala por conexiones SSE abiertas. Es el único que descifra OBO y hace OBO con Entra (`admin` solo consulta grupos en Graph con un registro aparte).
 - **`admin`**: agentes y versiones, skills, Knowledge Bases, modelos y precios, presupuestos y excepciones, usuarios, evaluaciones y la auditoría para el panel. Casi no escala; se despliega con el panel. Es el único que escribe agentes, skills, precios y límites y que lanza `StartIngestionJob`.
 - **Lo que no se divide**: el SSE sigue en `api` (separarlo añade un salto y otro despliegue para ganar poco); las rutas internas viven en `api` porque necesitan el secreto de Entra. Lanzar el agente sí es de `api` (chats y tareas, con el mismo `lanzar()`), no de `admin`: el panel pide sus ejecuciones de prueba por `/internal/lanzar`.
-- **Dentro de `api`**, módulos de Fastify con fronteras claras, cada uno con sus rutas, su dominio y sus permisos: `chats`, `runs` (con el SSE), `files`, `me`, `tasks`, `internal` y `push`.
+- **Dentro de `api`**, módulos de Fastify con fronteras claras, cada uno con sus rutas, su dominio y sus permisos: `chats`, `runs` (con el SSE), `files`, `me`, `tasks`, `telemetry`, `internal` y `push`.
 
 ### Lenguajes
 
@@ -1317,7 +1395,7 @@ mensaje 7f3a… (usuario X, agente Ventas v4)                  total 20,4 s
 ### Un monorepo
 
 - **Por qué**: hay código compartido de verdad y cruza lenguajes. El contrato (API, eventos del SSE y carga de `InvokeAgentRuntime`) genera los tipos de TypeScript y de Python; lanzar el agente solo lo hace `api`; la lógica de límites, precios y acceso la usan el backend, el MCP Hub y la Lambda de coste; `cerrar(run_id)` la usan la Lambda de Streams, la vigilante y el backend; el cliente de la API, la app y el panel. Un cambio en un evento toca los dos lados en el mismo pull request y, si no cuadra, falla la compilación.
-- **Estructura**: `apps/client` (la app Expo, iOS y web), `apps/panel` (Next.js con shadcn/ui), `apps/api` (el backend de la app, Fastify, con módulos `chats`, `runs` con el SSE, `files`, `me`, `tasks`, `internal` y `push`), `apps/admin` (la API del panel); `lambdas/` (autorizador, streams (cierre y avisos de aprobación), coste, vigilante, borrado, emergencia); `packages/` (`contrato`, `api-client`, `dominio`, `config`); `mcp/` (el hub y los servidores MCP propios en TypeScript: `mcp/hub`, `mcp/hora`, `mcp/documentos`); `kernel/` (Python); `infra/` (CDK con las pilas).
+- **Estructura**: `apps/client` (la app Expo, iOS y web), `apps/panel` (Next.js con shadcn/ui), `apps/api` (el backend de la app, Fastify, con módulos `chats`, `runs` con el SSE, `files`, `me`, `tasks`, `telemetry`, `internal` y `push`), `apps/admin` (la API del panel); `lambdas/` (autorizador, streams (cierre y avisos de aprobación), coste, vigilante, borrado, emergencia); `packages/` (`contrato`, `api-client`, `dominio`, `config`); `mcp/` (el hub y los servidores MCP propios en TypeScript: `mcp/hub`, `mcp/hora`, `mcp/documentos`); `kernel/` (Python); `infra/` (CDK con las pilas).
 - **Herramientas**: pnpm workspaces y Turborepo para TypeScript (solo se construye y prueba lo que cambia); uv para el kernel. La app de Expo vive en el monorepo con su configuración de Metro para paquetes internos y sus publicaciones con EAS; Next.js con `transpilePackages`.
 - **CDK en el mismo repositorio**: construye directamente las Lambdas y las imágenes de los contenedores, sin publicar paquetes entre repositorios.
 - **Fuera del monorepo**: el contenido de las skills (instrucciones y scripts), que se sube y versiona desde el panel.
@@ -1482,7 +1560,7 @@ Lo que falta probar contra AWS, con la prueba que lo resolvería; lo comprobado 
 | Una microVM por chat | No | Parcial | Probado casi todo con la sonda 9 (ver "Una microVM por chat" en "Verificado"). Falta: que la guarda del kernel de una ejecución a la vez y la verificación de la firma del token funcionan con el kernel real (`tini` y la limpieza con `kill(-1)` ya están en la sonda 10); y el coste de las sesiones inactivas con 15 minutos. | Con la imagen real del kernel: dos invocaciones al mismo chat a la vez, una invocación falsa desde el `Sandbox` a `127.0.0.1:8080`, un proceso que intenta sobrevivir al `fin`; y la factura de un día con 50 chats. |
 | Tareas programadas | Sí | Parcial | Cuánto dura en la práctica el refresh token del OBO con las políticas de acceso condicional de la empresa; y que `<aws.scheduler.scheduled-time>` llega igual en un reintento real de Scheduler (solo los hay con throttling o errores 5xx del destino, que la sonda 12 no pudo provocar). El consumidor de la cola estándar ya está probado (ver "Consumidor de la cola estándar de tareas" en "Verificado"). | Una tarea de prueba con una herramienta OBO, ejecutada a las 24 h y a los 7 días sin que el usuario abra la app. |
 | Confirmaciones | No | Parcial | Que el `approval_id` llega al hub en `_meta` por Streamable HTTP y a través del hub (por stdio y con un servidor MCP local ya está comprobado, como el hook de orden 0 antes del `ask`), también desde un subagente; cuánto cuesta una ejecución esperando 10 minutos en Runtime V2; y la tarjeta de aprobación de assistant-ui en Expo. | Una herramienta de prueba marcada con `confirmar`, también llamada desde un subagente: aprobar, rechazar, dejar caducar, cancelar durante la espera y llamar al hub sin aprobación. |
-| Trazas, idempotencia y latencia del arranque | No | Parcial | Que el `traceparent` atraviesa el API Gateway REST con streaming y `api` hasta `InvokeAgentRuntime`, y en las tareas el mensaje de SQS; que, con las trazas del runtime activadas, la traza del kernel queda enganchada a la de `api` y llega al MCP Hub y a los MCP; que una invocación repetida o una reentrega de la cola de tareas no crea una segunda ejecución ni un segundo cobro, también después de `fin`; y cuánto tarda la respuesta del `POST` (en frío y en caliente) y el primer evento. | Una ejecución de punta a punta buscada en Transaction Search; invocar dos veces la misma ejecución y reenviar dos veces el mismo disparo, también después de `fin`, y comprobar que solo hay una ejecución y un cobro; medir el `POST` y el tiempo hasta el primer evento, con la microVM del chat viva y sin ella. |
+| Trazas, idempotencia y latencia del arranque | No | Parcial | Que API Gateway REST con streaming continúa la traza de `X-Amzn-Trace-Id` (respetando `Sampled=1`) y reenvía `traceparent` a `api`, y que su segmento se ve desde la cuenta de la plataforma; que, con las trazas del runtime activadas, la traza del kernel queda enganchada a la de `api` y llega al MCP Hub y a los MCP; que X-Ray acepta los tramos que llegan por `POST /telemetry` y los que llegan tarde (`cerrar`, la vigilante) en la misma traza; que el endpoint OTLP de X-Ray responde por el VPC endpoint de X-Ray desde las tres VPC; que `aws/spans` admite nuestra CMK; que una invocación repetida o una reentrega de la cola de tareas no crea una segunda ejecución ni un segundo cobro, también después de `fin`; y cuánto tarda la respuesta del `POST` (en frío y en caliente) y el primer evento. | Un mensaje de la app de punta a punta (app, API Gateway, `api`, kernel, hub, MCP, cierre y push) buscado por `run_id` en Transaction Search; invocar dos veces la misma ejecución y reenviar dos veces el mismo disparo, también después de `fin`, y comprobar que solo hay una ejecución y un cobro; medir el `POST` y el tiempo hasta el primer evento, con la microVM del chat viva y sin ella. |
 | MCP Hub | Sí | Parcial | En AWS: el enrutado por ruta desde el kernel en el runtime por PrivateLink y el nombre fijo de Route 53, a través del DNS Firewall; el reparto entre dos tareas (el NLB reparte por conexión y un `MCPClient` con keep-alive iría siempre a la misma); y la latencia que añade el hub. La lógica del hub (ruta por MCP, `tools/list` filtrado, token, OBO, `confirmar` y bytes iguales) ya funciona en local (ver "Hub MCP en local" en "Verificado"). | `pruebas/aws/sonda_hub.py`, escrita y sin ejecutar: la cuota de 5 VPC de la cuenta de pruebas está llena por VPC de sondas que AgentCore no suelta. |
 | Paradas del entorno de pruebas | No | Parcial | Que el runtime, Code Interpreter y el MCP Hub vuelven a funcionar al recrear la red efímera, con el nombre fijo de Route 53 del hub y de `/internal/obo` apuntando a los endpoints nuevos; y cuánto tarda el arranque del lunes. | Una parada y un arranque manuales con una ejecución de prueba antes y después, cronometrando el `cdk deploy` de la red efímera. |
 | MCP por la VPC de integraciones | No | Parcial | Que el hub pasa el token OBO a `mcp-hora` por Service Connect; que los timeouts del proxy fijados por MCP no cortan herramientas lentas ni respuestas SSE de Streamable HTTP (el de por petición, unos 15 s por defecto, solo lo da una fuente de terceros); si Fargate y Service Connect necesitan en la VPC de integraciones los endpoints `ecs`, `ecs-agent`, `ecs-telemetry`, ECR y S3, o salen por la red corporativa; cómo se resuelven los nombres internos de los MCP corporativos; y que el hub confía en la CA interna. | Llamar a `quien_soy` y a una herramienta de prueba que tarde 25 s (más que los ~15 s por petición del proxy que da una fuente de terceros, menos que los 30 s del hub) desde un agente de prueba: debe devolver el `oid` del usuario y la audiencia del MCP, y la lenta no debe cortarse. |

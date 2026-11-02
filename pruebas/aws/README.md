@@ -20,7 +20,12 @@ uv venv --python 3.12 .venv312 && uv pip install --python .venv312/bin/python bo
 SONDA_REGION=eu-north-1 .venv312/bin/python sonda_agentcore.py
 ```
 
-Si una sonda de AgentCore deja una VPC sin borrar (las interfaces de red de AgentCore tardan en soltarse), se limpia luego con `.venv312/bin/python sonda_agentcore.py --borrar-restos`.
+Para borrar de la cuenta **todo** lo que crearon las sondas (por la etiqueta `sonda=nivel2` y el prefijo `sonda-n2-`/`sonda_n2_`, en las regiones que se indiquen; nada más), `limpiar_cuenta.py`: sin argumentos solo lista, y con `--borrar` borra en orden de dependencias y reintenta. Las claves de KMS quedan con borrado programado a 7 días. Si una VPC no se borra porque AgentCore aún no ha soltado sus interfaces de red, se repite a los pocos minutos. Probado contra una AWS simulada (moto), salvo AgentCore y DNS Firewall, que moto no emula.
+
+```bash
+SONDA_REGIONES=eu-north-1,us-east-1 .venv312/bin/python limpiar_cuenta.py            # lista
+SONDA_REGIONES=eu-north-1,us-east-1 .venv312/bin/python limpiar_cuenta.py --borrar   # borra
+```
 
 ## Sondas, en orden
 

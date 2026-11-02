@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
         <title id="dg-title">Diagrama de la arquitectura</title>
-        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api, que crea y lanza las ejecuciones, y las Lambdas vigilante y de borrado; dos Lambdas dibujadas junto a DynamoDB, en un marco aparte que también es esta VPC: la de cierre, que lee el stream de DynamoDB, cierra con cerrar(run_id) al ver fin y avisa al backend, y la de coste, que recibe el registro de invocaciones de Bedrock desde CloudWatch Logs y escribe el gasto, la denegación por presupuesto y los avisos), DynamoDB (cuatro tablas: actividad, configuración, OBO y auditoría), la cola SQS estándar de tareas (Scheduler deja los disparos y el backend los lee y los lanza como un chat) y la de borrados (el backend deja el chat borrado y la Lambda de borrado lo borra), la VPC de agentes con el kernel en AgentCore Runtime V2, una microVM por chat, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Code Interpreter y Evaluations). El hub lee y marca las aprobaciones en DynamoDB (no dibujado). La cola de borrados va sin flechas (la llena el backend y la consume la Lambda de borrado), como las aprobaciones del hub. No se dibuja la VPC de Code Interpreter.</desc>
+        <desc id="dg-desc">De izquierda a derecha: lo externo (app Expo, Entra ID, administradores, Akamai, Netskope, APNs); la cuenta iDMZ (API Gateway REST con su autorizador y el ALB web); la cuenta de la plataforma en us-east-1 con la VPC de servicios (NLB interno, app web, panel, Admin API, el backend api, que crea y lanza las ejecuciones, y las Lambdas vigilante, de caducar chats y de borrado de chats; dos Lambdas dibujadas junto a DynamoDB, en un marco aparte que también es esta VPC: la de cierre, que lee el stream de DynamoDB, cierra con cerrar(run_id) al ver fin y avisa al backend, y la de coste, que recibe el registro de invocaciones de Bedrock desde CloudWatch Logs y escribe el gasto, la denegación por presupuesto y los avisos), DynamoDB (cuatro tablas: actividad, configuración, OBO y auditoría), la cola SQS estándar de tareas (Scheduler deja los disparos y el backend los lee y los lanza como un chat) y la de borrado de chats (borrarChat deja el chat, desde el backend, el panel o la Lambda de caducar chats, y la Lambda de borrado de chats lo borra), la VPC de agentes con el kernel en AgentCore Runtime V2, una microVM por chat, que llama directamente a Bedrock, y a su lado la VPC de integraciones MCP con el MCP Hub, mcp-documentos, mcp-hora y otros MCP conectados a la red corporativa, y los servicios regionales (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock y Knowledge Bases); abajo, los servicios gestionados de AgentCore (Code Interpreter y Evaluations). El hub lee y marca las aprobaciones en DynamoDB (no dibujado). La cola de borrado de chats va sin flechas (la llena borrarChat y la consume la Lambda de borrado de chats), como las aprobaciones del hub. No se dibuja la VPC de Code Interpreter.</desc>
         <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;--font-display:var(--font-sans);--font-body:var(--font-sans);--warn:#b91c1c;font-family:var(--font-sans);background:#fff}
 .frame { fill: none; stroke-width: 1.5; }
 .frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
@@ -102,8 +102,8 @@
         <text class="bs" x="827" y="182">crea y lanza la ejecución</text>
         <text class="bs" x="827" y="198">STS · firma · OBO · push</text>
         <rect class="box work" x="1045" y="110" width="180" height="72" rx="8"/>
-        <text class="bt" x="1057" y="132">Vigilante y borrado</text>
-        <text class="bs" x="1057" y="150">Lambdas · caídas · chats</text>
+        <text class="bt" x="1057" y="132">Vigilante · chats</text>
+        <text class="bs" x="1057" y="150">caídas · caducar · borrar</text>
         <text class="bs" x="1057" y="166">StopRuntimeSession</text>
         <rect class="frame vpc" x="836" y="430" width="292" height="100" rx="10"/>
         <rect class="box work" x="590" y="440" width="230" height="80" rx="8"/>
@@ -162,8 +162,8 @@
         <text class="bt" x="1292" y="274">Secrets Manager</text>
         <text class="bs" x="1292" y="292">secreto de Entra (OBO) · credenciales de los MCP</text>
         <rect class="box work" x="1280" y="328" width="435" height="56" rx="8"/>
-        <text class="bt" x="1292" y="350">SQS · borrados</text>
-        <text class="bs" x="1292" y="368">api deja el chat borrado → Lambda de borrado</text>
+        <text class="bt" x="1292" y="350">SQS · borrado de chats</text>
+        <text class="bs" x="1292" y="368">borrarChat (api, admin, caducar) → Lambda de borrado de chats</text>
         <rect class="box work" x="1280" y="430" width="125" height="90" rx="8"/>
         <text class="bt" x="1292" y="452">S3</text>
         <text class="bs" x="1292" y="470">chats y memoria</text>

@@ -83,6 +83,7 @@ The glossary and the decisions behind this design come next. The detailed diagra
 | **Agent version** | Everything that changes how the agent answers: instructions, model, allowed tools, skills, subagents, Knowledge Bases, how it runs code, memory and confirmations. Each published version is immutable; a pointer says which one is in use, and each new message uses the one published at that moment. |
 | **Skill** | Instructions, scripts and `tools.yaml` versioned from the panel; its scripts are exposed to the model as tools when the skill is activated. |
 | **Subagent** | Another Strands agent inside the same kernel, exposed to the main agent as a tool, with its own `allow` list. It starts with an empty context on every call: the generic `worker` receives its role in the brief the main model writes; a named subagent brings its own instructions. |
+| **Predefined subagent** | A subagent from the platform's catalogue (`worker`, `explorer`, `planner`, `reviewer`), maintained by the platform team and versioned like skills; an agent version enables it by reference (`use: explorer@1`) instead of defining it. |
 
 **Running**
 
@@ -131,7 +132,7 @@ The glossary and the decisions behind this design come next. The detailed diagra
 - A single engine: our own kernel with Strands (Python) on AgentCore Runtime V2, in VPC mode, in us-east-1. No AgentCore Gateway, Identity or interceptor; no AgentCore Browser or web search (the managed Web Search is only exposed behind a Gateway, so that is out too); no LiteLLM or Dev Workbench.
 - Direct inference to Bedrock with per-run STS credentials, limited to the models of the agent version. The kernel does not declare the cost: it comes from the Bedrock invocation log, which carries the calling identity (the STS session name, which is the `run_id` and starts with the user's `oid`) and the tokens; a Lambda adds it up per user, chat and run. Per-user spending is cut off with an IAM deny on `aws:SourceIdentity`.
 - Every conversation goes through an agent; there is no direct chat with the model. One model per agent (and per subagent) in each version.
-- Subagents only as tools, as in Claude Code: a generic `worker` whose role the main model writes in each call's brief, plus named subagents only when a specialist needs another model or other tools. Each call starts with an empty context, and the main model decides the order and passes results from one to the next. No flow declared in the version (`Graph`); a model-written plan (`run_workflow`) is a future improvement.
+- Subagents only as tools, as in Claude Code: a catalogue of predefined subagents (`worker`, `explorer`, `planner`, `reviewer`) that each agent version enables by reference, whose role the main model writes in each call's brief, plus the agent's own subagents only when a specialist needs other instructions, another model or other tools. Each call starts with an empty context, and the main model decides the order and passes results from one to the next. No flow declared in the version (`Graph`); a model-written plan (`run_workflow`) is a future improvement.
 - Context: a single mode, the automatic one (the kernel's `ContextManager`: trimming, stash in S3 and configured summary; probe 18), with nothing to choose per version.
 - No AgentCore Memory: the agent conversation is per-chat files in S3 (one Strands snapshot per agent and the stash) and the user memory is two texts in the user's folder that the model changes with the `remember` tool and the user edits in the app.
 - The model's code, depending on the agent: in the microVM itself (with our own `Sandbox`: Strands' local environment isolates nothing) or in Code Interpreter in a VPC without DNS. Code Interpreter's SANDBOX mode does not isolate (the AWS guide describes it as having "limited external access": it reaches S3 and resolves DNS; Unit 42 and BeyondTrust showed it can be used to exfiltrate data), which is why it goes in a VPC.
@@ -428,7 +429,7 @@ The kernel writes to DynamoDB everything the agent is doing, not just the text, 
 
 - Text and tool calls: Strands' streaming events; those of a subagent reach the main agent's stream as `AgentAsToolStreamEvent`: that is where the `subagent` attribute comes from.
 - Start and end of each tool: their hooks (`BeforeToolCallEvent` and `AfterToolCallEvent`), registered on each agent: those of a subagent do not go through those of the main agent.
-- Each tool declares its label and how to summarise its result: skill tools in `tools.yaml`, MCP tools in their hub registry, defined in CDK (the panel shows them).
+- Each tool declares its label, how to summarise its result and whether it only reads (`read_only`, which the `explorer` and `planner` subagents use): skill tools in `tools.yaml`, MCP tools in their hub registry, defined in CDK (the panel shows them).
 
 ### History
 
@@ -1005,26 +1006,35 @@ attachments:
   types: [pdf, xlsx, csv]
   max_size_mb: 25
 subagents:
-  - name: worker            # generic: the main model writes its role in each call's brief
-    description: Does a bounded task that you describe in full (what to do, with what, what to return). It starts with no context: it does not see this conversation.
-    instructions: Do only the task in the brief and return just the result it asks for.
-    model: { id: <id of a model from the catalogue> }
-    hub_tools:
-      documents: [search_documents]
-  - name: reviewer          # named: only because it uses another model and no tools
+  - use: worker@1           # predefined: instructions and tool filter come from the catalogue
+  - use: explorer@1
+    model: { id: <id of a cheaper model from the catalogue> }   # optional: replaces the default
+  - name: sales-reviewer    # the agent's own: only because it needs fixed instructions
     description: Reviews a report and returns a list of errors in figures or wording.
     instructions: You are a demanding reviewer. Return only the list of errors, without rewriting the report.
     model: { id: <id of a cheaper model from the catalogue> }
     hub_tools: {}           # shorter than the main agent's: here, none
 ```
 
-On publishing, the panel validates the same as in "Agent versions": that `pdf-report@3` is approved, that the tools exist in the hub registry, that the Knowledge Base exists and that the model is active in the catalogue. `api` copies the published version into each run's payload, and puts in the run token the union of the `allow` lists of the main agent and its subagents, and the union of their Knowledge Bases.
+On publishing, the panel validates the same as in "Agent versions": that `pdf-report@3`, `worker@1` and `explorer@1` are approved, that the tools exist in the hub registry, that the Knowledge Base exists and that the model is active in the catalogue. `api` copies the published version into each run's payload, and puts in the run token the union of the `allow` lists of the main agent and its subagents, and the union of their Knowledge Bases.
 
 ### Subagents
 
 - **What it is**: an agent can delegate a bounded task to another agent ("review this document and give me a list of errors") and keep only the result, without filling its context. Strands has it built in: the "agent as tool" pattern (`strands/agent/_agent_as_tool.py`).
 - **How we use it, as in Claude Code**: the main model orchestrates. In the agent version, an optional list of subagents, each with a name, description (what the main model sees to decide when to call it), instructions, model and its own `allow` list, shorter than the main agent's. The kernel creates them as tools on startup; they are defined by the administrator and versioned with the agent, never by the model at run time. The model decides whether to call them, in what order and with what brief, and passes one's result to the next.
-- **A generic `worker` and few named ones**: the usual subagent is a generic `worker` with a fixed model and `allow` list; its role ("you are a reviewer…", "you are an arbiter: decide which of these errors are real…") goes in the brief the main model writes on each call. A named subagent is only worth it when a specialist needs another model, other tools or fixed instructions. For "a reviewer and then an arbiter", the main model calls `worker` twice with two briefs; neither needs to be declared.
+- **Predefined subagents and the agent's own**: as in Claude Code, the platform offers a catalogue of generic subagents and the agent version enables the ones it wants with `use: <name>@<version>`; their role ("you are a reviewer…", "you are an arbiter: decide which of these errors are real…") goes in the brief the main model writes on each call. The agent's own subagents (`name:` with its instructions, model and `allow`) are only worth it when a specialist needs fixed instructions, another model or other tools. For "a reviewer and then an arbiter", the main model calls `reviewer` (or `worker`) twice with two briefs; nothing needs to be declared beyond enabling them.
+- **The catalogue**: what each one can use is always a subset of what the main agent has in that version (its `allow` list, its Knowledge Bases and its code execution mode): a predefined subagent never adds tools.
+
+  | Subagent | What it is for | Tools | Default model |
+  |---|---|---|---|
+  | `worker` | Any bounded task the brief describes in full (the equivalent of Claude Code's `general-purpose`) | The main agent's hub tools, Knowledge Bases, chat files and code execution | The main agent's |
+  | `explorer` | Looking up information and returning what it found with its sources, without changing anything (Claude Code's `Explore`) | Only the main agent's hub tools marked `read_only`, Knowledge Bases (`Retrieve`) and reading chat files; no code execution or tools with `confirm` | The catalogue's cheapest active one |
+  | `planner` | Studying a task and returning a step-by-step plan, without carrying it out (Claude Code's `Plan`) | The same as `explorer` | The main agent's |
+  | `reviewer` | Reviewing a text or a result against the criteria in the brief and returning a list of problems; also as an arbiter | None: it only sees what the brief gives it | The main agent's |
+
+- **Read-only tools**: for `explorer` and `planner` the kernel needs to know which hub tools only read. Each tool declares it in its hub registry (`read_only`, next to its label, summary and `confirm`, defined in CDK); a tool without the mark counts as one that writes. As with each subagent's `allow` list, it is a kernel control: the hub applies the union of the version's lists.
+- **What the agent version can change**: only the model (`model:`) and narrowing the tools (`hub_tools:`, a subset of what the catalogue gives it); not the instructions or the description, which are what make it predictable. Whoever needs other instructions defines their own subagent.
+- **Versioned like skills**: each predefined subagent lives in the configuration table as `SUBAGENT#{name}` / `VERSION#{n}` (instructions, description, tool filter and default model) and follows the same lifecycle as skills: draft → approved by another administrator → retired. The agent version pins `name@version`, so a new version of `explorer` changes nothing until the agent is updated and its tests are passed. `api` copies the definition into the payload with the rest of the version, so the kernel does not read the table.
 - **Empty context on every call**: each subagent is created with `as_tool(preserve_context=False)` (checked in the Strands code: it copies the initial messages and state when the tool is created and restores them before each call). It does not see the main agent's conversation or its own earlier calls: whatever it needs goes in the brief. That way an arbiter does not carry what it said as a reviewer. Strands does not allow it with a session manager, so subagents have no snapshot or stash in S3 (see "Conversation and memory (S3)"): what they produce stays in the main agent's conversation as the tool result.
 - **One call at a time**: subagents are tools like the others and the main agent runs them with its `SequentialToolExecutor` (see "Chat files (kernel and Code Interpreter)"): two subagents requested in the same response run one after the other. Besides, Strands does not allow two concurrent calls to the same subagent (the second one returns "already processing a request"). Running them in parallel is part of `run_workflow` (below).
 - **Same security boundary**: a subagent is another `Agent` object inside the same kernel process, not another Runtime invocation. It uses the same STS credentials, the same run token and the same chat workspace; its tools go through the hub with the same approvals and the same audit. The hub cannot know which subagent is calling (the run token is the same), so it applies the union of the version's `allow` lists (main agent and subagents); each subagent's shorter list is a kernel control, like the skills' one: it improves behaviour, it is not security. The brief the model writes changes what the `worker` does, not what it can do. Nothing changes in the network or in IAM.
@@ -1352,6 +1362,7 @@ Each table holds several record types, told apart by the key prefix. A key writt
 | Agent | `AGENT#{id}` | The editable draft and the `published` pointer |
 | Agent version | `AGENT#{id}` / `VERSION#{n}` | The immutable published version, with hash, author and date |
 | Skill version | `SKILL#{id}` / `VERSION#{n}` | Each approved `skill@version` with its hash, immutable like the agent versions |
+| Predefined subagent version | `SUBAGENT#{name}` / `VERSION#{n}` | Each approved version of a catalogue subagent (`worker`, `explorer`, `planner`, `reviewer`): instructions, description, tool filter and default model; immutable like the skill versions |
 | Model | `MODEL#{id}` | A catalogue entry: model id, price per token, context window and whether it is active |
 | Limit | `LIMIT#DEFAULT`, `LIMIT#GROUP#{id}`, `LIMIT#USER#{oid}` | Monthly budget per rule |
 | Deny entry | `DENY#…` | Who has hit the limit this month; emptied on day 1 |

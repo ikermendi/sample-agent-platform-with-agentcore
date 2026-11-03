@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1200" role="img" aria-labelledby="dg-title dg-desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1040" role="img" aria-labelledby="dg-title dg-desc">
         <title id="dg-title">Architecture diagram</title>
-        <desc id="dg-desc">From left to right: the external side (Expo app, Entra ID, administrators, Akamai, Netskope, APNs); the iDMZ account (API Gateway REST with its authorizer, and the web ALB); the platform account in us-east-1 with the services VPC (internal NLB, web app, panel, Admin API, the api backend, which creates and launches runs, and three Lambdas, each in its own box: the watchdog, which finds dead runs every minute, the daily chat expiry, which calls deleteChat, and the chat deletion Lambda, which reads the chat deletion queue, stops the chat's microVM and deletes S3, messages, COST# and the chat, all three writing to DynamoDB; two more Lambdas, each in its own box, drawn next to DynamoDB, in the lower part of the same VPC frame: the run events Lambda, which reads the DynamoDB stream, closes with close(run_id) when it sees end and notifies the backend of ends and pending approvals, and the cost Lambda, which receives the Bedrock invocation log from CloudWatch Logs and writes the spend, the budget denial and the alerts), DynamoDB (four tables: activity, configuration, OBO and audit), the standard SQS task queue (Scheduler drops the firings and the backend reads them and launches them as a chat) and the chat deletion queue (deleteChat drops the chat, from the backend or the chat expiry Lambda, and the chat deletion Lambda deletes it), the agents VPC with the kernel on AgentCore Runtime V2, one microVM per chat, which calls Bedrock directly, and next to it the MCP integrations VPC with the MCP Hub, mcp-documents, mcp-time and other MCPs connected to the corporate network, and the regional services (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock and Knowledge Bases); at the bottom, the AgentCore managed services (Code Interpreter and Evaluations). The hub reads and marks approvals in DynamoDB (not drawn). The chat deletion queue has no arrows (deleteChat fills it and the chat deletion Lambda consumes it), like the hub's approvals. The Code Interpreter VPC is not drawn.</desc>
+        <desc id="dg-desc">From left to right: the external side (Expo app, Entra ID, administrators, Akamai, Netskope, APNs); the iDMZ account (API Gateway REST with its authorizer, and the web ALB); the platform account in us-east-1 with the services VPC (internal NLB, web app, panel, Admin API, the api backend, which creates and launches runs, and three Lambdas, each in its own box: the watchdog, which finds dead runs every minute, the daily chat expiry, which calls deleteChat, and the chat deletion Lambda, which reads the chat deletion queue, stops the chat's microVM and deletes S3, messages, COST# and the chat, all three writing to DynamoDB; two more Lambdas, each in its own box, drawn next to DynamoDB, in the lower part of the same VPC frame: the run events Lambda, which reads the DynamoDB stream, closes with close(run_id) when it sees end and notifies the backend of ends and pending approvals, and the cost Lambda, which receives the Bedrock invocation log from CloudWatch Logs and writes the spend, the budget denial and the alerts), DynamoDB (four tables: activity, configuration, OBO and audit), the standard SQS task queue (Scheduler drops the firings and the backend reads them and launches them as a chat) and the chat deletion queue (deleteChat drops the chat, from the backend or the chat expiry Lambda, and the chat deletion Lambda deletes it), the agents VPC with the kernel on AgentCore Runtime V2, one microVM per chat, which calls Bedrock directly, and next to it the MCP integrations VPC with the MCP Hub, mcp-documents, mcp-time and other MCPs connected to the corporate network, and the regional services (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock and Knowledge Bases); at the bottom, the AgentCore managed service (Evaluations). The hub reads and marks approvals in DynamoDB (not drawn). The chat deletion queue has no arrows (deleteChat fills it and the chat deletion Lambda consumes it), like the hub's approvals.</desc>
         <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;--font-display:var(--font-sans);--font-body:var(--font-sans);--warn:#b91c1c;font-family:var(--font-sans);background:#fff}
 .frame { fill: none; stroke-width: 1.5; }
 .frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
@@ -47,7 +47,7 @@
         <rect class="frame vpc" x="1060" y="565" width="655" height="200" rx="10"/>
         <text class="frame-label work" x="1074" y="587" style="font-size:10.5px">MCP integrations VPC · → corporate network (TGW / DX / VPN)</text>
         <text class="frame-label work" x="1280" y="62" style="font-size:10.5px">Regional services</text>
-        <rect class="frame core" x="240" y="860" width="790" height="320" rx="10"/>
+        <rect class="frame core" x="240" y="860" width="790" height="155" rx="10"/>
         <text class="frame-label core" x="254" y="882">Amazon Bedrock AgentCore · managed services</text>
         <rect class="box ext" x="20" y="110" width="190" height="80" rx="8"/>
         <text class="bt" x="32" y="132">Expo app</text>
@@ -134,7 +134,7 @@
         <text class="bs" x="602" y="670">models → Bedrock direct (VPC endpoints)</text>
         <text class="bs" x="602" y="686">tools → MCP Hub (PrivateLink)</text>
         <text class="bs" x="602" y="702">events and usage → DynamoDB · chat workspace ↔ S3</text>
-        <text class="mono" x="602" y="718">code: local (shell) or Code Interpreter</text>
+        <text class="mono" x="602" y="718">code: local (shell), in the microVM itself</text>
         <rect class="box work" x="1085" y="600" width="160" height="150" rx="8"/>
         <text class="bt" x="1097" y="622">MCP Hub</text>
         <text class="bs" x="1097" y="640">TypeScript · Fargate</text>
@@ -184,16 +184,10 @@
         <text class="bs" x="1592" y="470">Bases (RAG)</text>
         <text class="bs" x="1592" y="486">filters by</text>
         <text class="bs" x="1592" y="502">agent and group</text>
-        <rect class="box core" x="505" y="900" width="290" height="130" rx="8"/>
-        <text class="bt" x="517" y="922">Code Interpreter</text>
-        <text class="bs" x="517" y="940">only agents in that mode</text>
-        <text class="bs" x="517" y="956">own VPC without DNS</text>
-        <text class="bs" x="517" y="972">no network or credentials</text>
-        <text class="bs" x="517" y="988">files via the API</text>
-        <rect class="box core" x="265" y="1065" width="760" height="90" rx="8"/>
-        <text class="bt" x="277" y="1087">AgentCore Evaluations</text>
-        <text class="bs" x="277" y="1105">reads the kernel's OTEL traces in CloudWatch · online: % of real sessions</text>
-        <text class="bs" x="277" y="1121">batch from the panel before publishing a version · scores per agent and version</text>
+        <rect class="box core" x="265" y="900" width="760" height="90" rx="8"/>
+        <text class="bt" x="277" y="922">AgentCore Evaluations</text>
+        <text class="bs" x="277" y="940">reads the kernel's OTEL traces in CloudWatch · online: % of real sessions</text>
+        <text class="bs" x="277" y="956">batch from the panel before publishing a version · scores per agent and version</text>
         <path class="wire" d="M115,190 V217" marker-end="url(#arr)"/>
         <g class="badge"><circle cx="115" cy="204" r="11"/><text x="115" y="204">1</text></g>
         <path class="wire" d="M210,140 H257" marker-end="url(#arr)"/>
@@ -250,6 +244,5 @@
         <g class="badge"><circle cx="550" cy="500" r="11"/><text x="550" y="500">12</text></g>
         <path class="wire" d="M115,615 V637" marker-end="url(#arr)"/>
         <path class="wire" d="M20,588 H8 V262 H17" marker-end="url(#arr)"/>
-        <path class="wire" d="M700,760 V897" marker-end="url(#arr)"/>
-        <g class="badge"><circle cx="700" cy="840" r="11"/><text x="700" y="840">8</text></g>
+        <g class="badge"><circle cx="985" cy="714" r="11"/><text x="985" y="714">8</text></g>
       </svg>

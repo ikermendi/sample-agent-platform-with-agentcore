@@ -1339,7 +1339,7 @@ Each table holds several record types, told apart by the key prefix. A key writt
 | Run | `RUN#{run_id}` | `status`, user, agent, version, chat, `traceparent` and `last_heartbeat` (who writes each field: "Who writes what in RUN#{run_id} and CTL#{run_id}") | 90 days |
 | Run control | `CTL#{run_id}` / `CTL` | `cancel`, who set it and when. In its own partition, which the session can only read | 90 days |
 | Run event | `RUN#{run_id}` / `EVT#000001…`; `end` is `EVT#999999` | One SSE event: text, tool, file, usage, `context`, approval… | 48 h; `end` lasts as long as the run |
-| Memory proposal | `CTL#{run_id}` / `MEM#{proposal_id}` | Text and state (pending, accepted, rejected). Written by the run events Lambda and decided by `api` | 30 days |
+| Memory proposal | `CTL#{run_id}` / `MEM#{proposal_id}` | Text, `created_at` and state (pending, accepted, rejected). Written by the run events Lambda and decided by `api` | 30 days |
 | Approval | `CTL#{run_id}` / `APR#{approval_id}` | Tool, arguments (JSON string), summary, `expires_at`, state (pending, granted, rejected, expired, used). In the run's control partition, which the session can only read | 30 days |
 | Scheduled task | `TASK#{task_id}` (`task_id` is what the chat stores in `task` and what the Scheduler schedule points to) | Owner, its chat, agent, frequency, last and next run, failures and state (active or paused) | No TTL: the watchdog deletes those paused for 90 days |
 | User | `USER#{oid}` | Name, email, groups, first and last sign-in, `status` (active or deactivated) and app settings (`use_memory`) | No TTL: a user is deactivated, not deleted, and the panel and the audit refer to them |
@@ -1384,6 +1384,59 @@ None expires: it is configuration and is deleted by hand.
 |---|---|---|---|---|
 | By user | User and date | `AUDIT#…` | A user's incidents, by date | `admin` (the panel) |
 
+### Examples: a run's records
+
+The same user (`oid` = `3f2a9c1e`) in the chat `c9`, with a run whose `run_id` is `3f2a9c1e.01JC8ZK4QF` (`{oid}.{ULID}`). The `RUN#` partition is the run's log, which the session writes; the `CTL#` partition is what controls it, which the session can only read: IAM can only limit by partition key (`dynamodb:LeadingKeys`), not by sort key, which is why they are two partitions and not two prefixes in one.
+
+**1. A memory proposal that the user saves.** The user writes "remember that I work in sales in Bilbao".
+
+| PK | SK | What it holds | Written by |
+|---|---|---|---|
+| `RUN#3f2a9c1e.01JC8ZK4QF` | (fixed) | `status = running`, `last_heartbeat`, chat `c9`, agent and version | `api` creates it; the kernel moves it to `running` and writes the heartbeat |
+| `RUN#3f2a9c1e.01JC8ZK4QF` | `EVT#000014` | `memory_proposal` event: `proposal_id = p1`, "Works in the Bilbao sales team" | Kernel (the store's `add`, called by `add_memory`) |
+| `CTL#3f2a9c1e.01JC8ZK4QF` | `CTL` | `cancel` empty | `api`, `admin` or `deleteChat`, if someone stops the run |
+| `CTL#3f2a9c1e.01JC8ZK4QF` | `MEM#p1` | The same text, `state = pending`, `created_at` | Run events Lambda, from the insert of `EVT#000014` |
+
+1. The kernel writes `EVT#000014`; the model has received `{"stored": 1}` and tells the user that it is waiting for their confirmation.
+2. The run events Lambda sees the insert in the stream and creates `MEM#p1` as `pending`, with `attribute_not_exists`.
+3. The SSE reads `EVT#000014`, looks up `MEM#p1` (if it is not there yet, it retries on the next read) and sends the card built from `MEM#p1`.
+4. "Save": `api` moves `MEM#p1` to `accepted` (only if it is `pending`) and adds the line to `memory.md` with `If-Match`. The next run of any of the user's agents reads it in its system prompt.
+
+**2. An approval that the model's code tries to get around.** A `local` agent with `crm.log_opportunity` marked `confirm`; the model asks to log the opportunity `OP-1182` for 250,000 €, and its code, which has taken the session credentials from the kernel's memory, tries to have it pass for something else.
+
+| PK | SK | What it holds | Written by |
+|---|---|---|---|
+| `RUN#3f2a9c1e.01JC8ZK4QF` | `EVT#000021` | `approval_pending` event: `approval_id = a7`, tool, arguments `{"opportunity": "OP-1182", "amount": 250000}`, summary | Kernel |
+| `CTL#3f2a9c1e.01JC8ZK4QF` | `APR#a7` | A copy of the tool and the arguments, `expires_at` = time of the insert + 10 min, `state = pending` | Run events Lambda |
+
+- **It rewrites the event** so that its summary says "2,500 €": it can, because it is in `RUN#`; but the Lambda already copied `APR#a7` from the insert (later changes are `MODIFY`, outside its filter), and `api` builds the card from `APR#a7`: the user sees 250,000 €.
+- **It sets `APR#a7` to `granted`**: `AccessDenied`, because the session only reads `CTL#`.
+- **It calls the hub directly** with `approval_id = a7` and other arguments: the hub compares them with those of `APR#a7` (deep equality) and denies.
+- **If the user approves**, `api` moves `APR#a7` to `granted` (only if it is `pending` and before `expires_at`), the kernel reads it in `CTL#` and calls the hub, and the hub marks it `used`: a second call with `a7` is denied.
+- **If nobody answers**, at 10 minutes the kernel denies the tool and ends with `end` (`approval_expired`); `api` and the hub would no longer accept `a7`, and `close(run_id)` sets `APR#a7` to `expired` and records it under `AUDIT#platform#`.
+
+**3. Stop with the kernel dead and fake heartbeats.** The run starts at 10:00. At 10:12 a process of the model's code that escaped its group kills the kernel and keeps updating `last_heartbeat` every 30 s with the session credentials.
+
+| Time | `RUN#…` (fixed) | `CTL#…` / `CTL` | Watchdog |
+|---|---|---|---|
+| 10:12–10:15 | `running`, fresh heartbeat | — | Sees it alive and does nothing |
+| 10:15:03 | `running`, fresh heartbeat | `cancel = true`, set at 10:15:03 by `api` (stop) | — |
+| 10:16 | the same | the same | `cancel` for 1 minute: it waits |
+| 10:18 | the same | the same | `cancel` for more than 2 minutes without effect: `failed` (conditional on the state and the heartbeat it read; if a heartbeat slips in between, the write fails and the next pass retries), `StopRuntimeSession`, and about 3 s later `end` (`interrupted`) |
+
+Without the stop, the watchdog would see a live run until the session credentials expire (11:00, one hour after the launch); from then on the heartbeat fails and at about 11:03 it closes it. During that time the chat stays busy (409); nobody else is affected.
+
+**4. A proposal saved days later.** The run of example 1 ended at 10:01 and the user did not answer the card.
+
+| PK | SK | What it holds |
+|---|---|---|
+| `CHAT#c9` | `MSG#2026-11-03T10:00:00Z#3f2a9c1e.01JC8ZK4QF` | The consolidated message, with `proposals = [p1]` (written by `close(run_id)`) |
+| `CTL#3f2a9c1e.01JC8ZK4QF` | `MEM#p1` | `state = pending`, `created_at` = 2026-11-03T10:00:41Z |
+
+- **Day 3**: the run's events have already expired (48 h), but `GET /chats/c9/messages` returns the consolidated message and `api` adds the state of `MEM#p1`: the card comes back with its buttons. "Save" works as in example 1; if the user edited the memory in the app in the meantime, the `PUT` gets 412, `api` reads it again, adds the line and retries.
+- **Day 31**: `api` treats the proposal as expired by its `created_at` + 30 days, not by the TTL deletion (DynamoDB can take up to a couple of days to delete it): the card is shown without buttons.
+- **If the chat was deleted** in the meantime, `api` no longer serves it, nor accepts a "Save" on `p1`.
+
 ### S3
 
 - **By prefixes**: `workspaces/{user}/{chat}/` (chat files and agent conversation), `workspaces/{user}/memory/` (user memory), `skills/{id}/{version}/` and `documents/` (RAG). How the files are synced is in "Chat files"; the conversation and the memory, below.
@@ -1407,7 +1460,7 @@ No AgentCore Memory: everything is files in the workspaces bucket, under the use
 - **User memory (long term)**: a text file, `workspaces/{user}/memory/memory.md`, one line per item: preferences (language, format, tone) and what is worth knowing about them (their team, their projects); shared by all their agents and capped at about 10 KB. There is no per-agent memory: what is told to one agent can be used by another of the same user; it is their own memory and they see it in full in the app.
 - **Reading**: the kernel reads it when each run starts (one `GET`, keeping its ETag; with the `Agent` already in memory, a conditional `GET` with that ETag, which returns 304 with no body if nobody changed it) and puts it in the system prompt, in a block of their own. If the agent version has "use memory" turned off, or the user has disabled it in the app (`api` carries it in the payload), it does not read it.
 - **Writing: the agent proposes, the user decides**: the kernel adds Strands' `MemoryManager` with a single store of its own (with two, `add_memory` without a target proposes to all of them, checked locally) and only its `add_memory` tool (`search_tool_config=False` and `injection=False`: the memory is small and already goes whole in the system prompt, cached; Strands' injection would fold it into the latest user message on every call, outside the cache). The model calls `add_memory` with the text when the user expresses a stable preference or asks it to remember something. The store's `add` writes nothing: it emits a `memory_proposal` event (proposal id and text), and the tool answers success (`{"stored": 1}`, fixed by Strands); its description tells the model that nothing is saved until the user confirms it, so that it says so. `add_memory` only adds: changing or removing a line is done by the user in the app. No automatic extraction (Strands' `ModelExtractor`): it would be one more model call in every run, including the early-morning tasks, and would fill the file with noise. Subagents do not get it. Checked locally with Strands 1.63.0 (`pruebas/kernel/t_memoria.py`).
-- **Confirmation**: as with approvals, the run events Lambda copies the proposal, from the insert of the event, as pending into `CTL#{run_id}` / `MEM#{proposal_id}`, and `api` builds the card from that copy (the SSE waits for it, like an approval's). It does not stop the run: the card stays in the chat with "Save" and "Discard" while the proposal is pending (30 days). When the chat is reopened after the run has been consolidated, `close(run_id)` has stored the proposal's id in the consolidated message and `api` adds its state from `CTL#` when serving the messages. "Save" (`POST /runs/{id}/memory/{proposal_id}`, only the chat owner) moves it to `accepted`, conditional on `pending`, and `api` adds the line to the file; "Discard" moves it to `rejected`. The model's code of a `local` agent could invent a proposal, but it would still need the user to save it.
+- **Confirmation**: as with approvals, the run events Lambda copies the proposal, from the insert of the event, as pending into `CTL#{run_id}` / `MEM#{proposal_id}`, and `api` builds the card from that copy (the SSE waits for it, like an approval's). It does not stop the run: the card stays in the chat with "Save" and "Discard" while the proposal is pending (30 days from its `created_at`, checked by `api`; afterwards, without buttons). When the chat is reopened after the run has been consolidated, `close(run_id)` has stored the proposal's id in the consolidated message and `api` adds its state from `CTL#` when serving the messages. "Save" (`POST /runs/{id}/memory/{proposal_id}`, only the chat owner) moves it to `accepted`, conditional on `pending`, and `api` adds the line to the file; "Discard" moves it to `rejected`. The model's code of a `local` agent could invent a proposal, but it would still need the user to save it.
 - **Without overwriting each other**: only `api` writes the memory: the app's edits and the accepted proposals, which can coincide (two chats, or a chat and the settings screen). It does a `PUT` with `If-Match` = the ETag it read (S3 conditional write). For a proposal, if S3 responds 412 (or 409, if another write coincides in time) it reads it again, adds the line to the new content and retries; if the file does not exist yet (with `If-Match`, S3 responds 404), it creates it with `If-None-Match: *`. For an edit from the app, it uses the ETag it returned on read and, if it does not match, responds 412 and the app shows the new version. It is a few KB: no lock is needed. That is why the memory does not go through the file sync.
 - **Isolation**: it is S3 with IAM, with no condition keys of its own: the session role policy, with the run's tags (`${aws:PrincipalTag/oid}` and `${aws:PrincipalTag/chat}`, see "How it fits in IAM"), allows `GetObject` and `PutObject` on `workspaces/{user}/{chat}/conversation/*`, only `GetObject` on that user's `workspaces/{user}/memory/*`, plus `ListBucket` on those prefixes (without it, a key that does not exist yet gives 403 instead of `NoSuchKey`, and `S3Storage` fails on the chat's first message), and nothing else. In local mode the model's code does not receive those credentials in its environment, but it runs with the kernel's user and could take them from its memory: it could then read or rewrite that chat's conversation, like the chat files, and read that user's memory, but not change it (see "Running the model's code").
 - **Deleting a chat: a single function.** `deleteChat(chat)`, from `packages/domain`, is used by the two that delete: `api` when the user deletes it and the chat expiry Lambda when it expires. The panel does not delete chats: an administrator deactivates the user and their chats expire. It marks the chat `deleted` and sets `expires` = now and `expires_day` = today, whoever deletes it: it stays in the expiry index, already expired, until the chat deletion Lambda deletes the chat, so if `deleteChat` dies before enqueuing, or the message ends up in the DLQ, the next chat expiry pass finds it again and enqueues it again. It puts `cancel` on its active run if there is one, deletes its scheduled task if it has one (the chat stores the id of its task, `task`: each task has its own chat) and its Scheduler schedule (not pausing it: reactivating the task of a chat that no longer exists would recreate it), leaves `{chat, oid}` in the chat deletion SQS queue and responds 204: it disappears from the app at once, even if it has a run in progress. If the chat was already `deleted`, it only enqueues again: that way a `deleteChat` that died before enqueuing is fixed by repeating it. From that moment `api` gives no presigned URLs and serves no runs, events or files of that chat.

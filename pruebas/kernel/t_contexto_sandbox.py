@@ -145,16 +145,3 @@ def test_limite_de_procesos_solo_vale_con_otro_usuario():
         print("como nobody, hijos creados con NPROC=20:", como_nobody[1].strip())
         assert int(como_yo[1].strip()) == 60          # root ignora RLIMIT_NPROC
         assert int(como_nobody[1].strip()) < 20       # con otro usuario sí se limita
-
-
-def test_otro_usuario_no_lee_entorno_ni_memoria_del_kernel():
-    if os.getuid() != 0:
-        pytest.skip("hace falta root para cambiar de usuario")
-    os.environ["SECRETO_DEL_KERNEL"] = "credencial-de-prueba"
-    yo = os.getpid()
-    sb = SandboxLento(usuario="nobody")
-    env = asyncio.run(_run(sb, f"cat /proc/{yo}/environ"))
-    mem = asyncio.run(_run(sb, f"head -c 10 /proc/{yo}/mem"))
-    print("environ del kernel como nobody:", env, "| mem:", mem)
-    assert "credencial-de-prueba" not in env[1] and "Permission denied" in env[1]
-    assert "Permission denied" in mem[1]

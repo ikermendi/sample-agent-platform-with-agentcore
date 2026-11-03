@@ -2,7 +2,7 @@
 
 *Reference design · Expo (iOS and web) + REST · AWS us-east-1*
 
-How a message travels from the Expo app (iOS and web) to the agent and back: entry through the iDMZ account, a stateless backend on Fargate that creates the run and starts it, our own kernel (Strands) on AgentCore Runtime V2, with one microVM per chat, which calls the Bedrock models directly, and our own MCP Hub through which all MCP tools pass and which enforces the allowed tools list, confirmations and OBO.
+The architecture of the agent platform: what it is and its parts, the decisions behind it, how a message travels from the app to the agent and back, and how each piece works, is operated, built and tested.
 
 Pieces: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate · DynamoDB · AgentCore Runtime V2 · Own MCP Hub · Bedrock: Claude · TypeScript + Python · CDK
 
@@ -41,62 +41,28 @@ Three ideas shape it:
 - **The agent never holds the user's token.** Each run gets its own STS credentials and a signed run token. Anything that touches an internal system goes through the hub, which applies the allowed tools, the confirmations and OBO.
 - **The agents are closed in.** Nothing in the agents VPC reaches the internet or the corporate network. The model's free-form code runs either inside the microVM or in Code Interpreter in a VPC without DNS.
 
-<a id="diagram"></a>
+At a very high level:
 
-![Architecture diagram](arquitectura-agentes.svg)
+```mermaid
+flowchart LR
+  App["Expo app<br/>iOS and web"]
+  API["Backend (api)<br/>Fargate · stateless"]
+  K["Kernel<br/>AgentCore Runtime · 1 microVM per chat"]
+  B["Bedrock<br/>Claude"]
+  H["MCP Hub"]
+  Sys["Internal systems"]
 
-Legend: iDMZ account · Platform account · AgentCore and kernel · Data flow · Control / authentication · Journey step
+  App -- "message" --> API
+  API -- "launches the run" --> K
+  K -- "model calls" --> B
+  K -- "tools" --> H --> Sys
+  K -. "events (DynamoDB)" .-> API
+  API -. "SSE" .-> App
+```
 
-The numbers are the steps of [a message's journey](#journey). Dashed lines are control: authentication, OBO tokens and the push notification. The minimal Code Interpreter VPC is not drawn (see "The four VPCs").
+The app sends the user's message to the backend. The backend checks access and budget, creates the run and launches it in the chat's microVM. There the kernel runs the agent loop: it calls the model in Bedrock and, through the MCP Hub, the tools that reach internal systems. The kernel writes each event to DynamoDB, and the backend streams it to the app over SSE.
 
-### The parts
-
-**Outside the platform**
-
-- **Expo app** (iOS and web, assistant-ui): chats with agents, files, scheduled tasks and memory. It signs in with Entra and follows each run over SSE. [The app](#app).
-- **Microsoft Entra ID**: sign-in, MFA and conditional access. Its groups decide which agents each user sees and the roles in the panel. It also issues the OBO tokens. [Identity and permissions](#identity).
-- **Akamai**: CDN and WAF in front of the panel and the web app (the app's API does not go through it).
-- **Netskope**: the only exit to the internet (Entra, APNs, Web Push).
-- **APNs and Web Push**: notify the user when a run ends or is waiting for an approval.
-
-**iDMZ account**
-
-- **API Gateway REST**: the only public entry for the app, with response streaming for SSE and a per-IP WAF. It reaches the platform over PrivateLink.
-- **Lambda authorizer**: validates the Entra JWT. `api` reads `oid` and groups from the token itself.
-- **Web ALB**: serves the panel and the web app coming from Akamai, also over PrivateLink.
-
-**Services VPC (platform account)**
-
-- **Internal NLB**: the PrivateLink service through which the iDMZ reaches `api`.
-- **Backend (`api`)**: TypeScript on Fargate, stateless. It handles chats, checks access and budget, and creates and launches each run (STS credentials, run token, `InvokeAgentRuntime`). It also serves the SSE, files, OBO and push, and consumes the scheduled tasks queue.
-- **Admin panel and `admin`**: the panel (Next.js) is only the interface. The `admin` service holds the logic: agents, skills, Knowledge Bases, models, budgets, users, evaluations and audit. [The admin panel](#panel).
-- **Web app**: Expo's static export served by nginx.
-- **Run events Lambda**: reads the activity table's stream. On `end` it closes the run with `close(run_id)`, and it pushes notifications about pending approvals. [Lifecycle](#lifecycle).
-- **Cost Lambda**: adds up the spending per user, chat and run from the Bedrock invocation log. It sends the 80 % and 100 % alerts and cuts the user off with an IAM deny.
-- **Watchdog Lambda**: every minute it fails the runs that stopped sending heartbeats.
-- **Chat expiry and chat deletion Lambdas**, with their SQS queue: expire inactive chats and physically delete chats (microVM, S3 and DynamoDB).
-- **EventBridge Scheduler and the tasks SQS queue**: one schedule per task. When a task fires, the message lands in the queue and `api` launches the run. [Operations](#operations).
-
-**Agents VPC**
-
-- **AgentCore Runtime V2 with our kernel** (Python, Strands): one microVM per chat. It runs the agent loop: it calls the model, calls tools through the hub, runs skills and code, writes events to DynamoDB and syncs the chat workspace with S3. The VPC has no egress and is protected by DNS Firewall. [The agent at run time](#agent), [Network and isolation](#network).
-
-**MCP integrations VPC**
-
-- **MCP Hub**: the single door for MCP tools. It verifies the run token and applies the `allow` list, the approvals and OBO. It audits each call and fails closed. [MCP Hub](#hub).
-- **Our own MCPs** (`mcp-documents`, `mcp-time` and others): on Fargate. This is the only VPC connected to the corporate network, which is how MCPs reach internal APIs.
-
-**Regional services**
-
-- **DynamoDB** (four tables: activity, configuration, OBO and audit), **S3** (chats, memory, skills and documents), **KMS**, **Secrets Manager** and **CloudWatch** with X-Ray. [Persistence](#persistence), [End-to-end tracing](#tracing).
-- **Bedrock**: the Claude models, called directly by the kernel. **Knowledge Bases** handle RAG, filtered by agent and group. [Agents, skills, models and knowledge](#governance).
-
-**AgentCore managed services**
-
-- **Code Interpreter**: runs the model's code for the agents in that mode, in its own VPC without DNS, network or credentials.
-- **AgentCore Evaluations**: scores agent quality, online over real sessions and in batch from the panel before a version is published.
-
-The decisions behind this design come next. How the pieces work together for one message is in [A message's journey](#journey).
+The decisions behind this design come next. The detailed diagram, with accounts and VPCs, what each piece does and how they work together for one message are in [A message's journey](#journey).
 
 <a id="decisions"></a>
 
@@ -150,6 +116,65 @@ The decisions behind this design come next. How the pieces work together for one
 <a id="journey"></a>
 
 ## A message's journey
+
+<a id="diagram"></a>
+
+![Architecture diagram](arquitectura-agentes.svg)
+
+Legend: iDMZ account · Platform account · AgentCore and kernel · Data flow · Control / authentication · Journey step
+
+The numbers are the steps of the journey, described below. Dashed lines are control: authentication, OBO tokens and the push notification. The minimal Code Interpreter VPC is not drawn (see "The four VPCs").
+
+### The parts
+
+The parts are grouped by the zones of the diagram.
+
+**Outside the platform**
+
+- **Expo app** (iOS and web, assistant-ui): chats with agents, files, scheduled tasks and memory. It signs in with Entra and follows each run over SSE. [The app](#app).
+- **Microsoft Entra ID**: sign-in, MFA and conditional access. Its groups decide which agents each user sees and the roles in the panel. It also issues the OBO tokens. [Identity and permissions](#identity).
+- **Akamai**: CDN and WAF in front of the panel and the web app (the app's API does not go through it).
+- **Netskope**: the only exit to the internet (Entra, APNs, Web Push).
+- **APNs and Web Push**: notify the user when a run ends or is waiting for an approval.
+
+**iDMZ account**
+
+- **API Gateway REST**: the only public entry for the app, with response streaming for SSE and a per-IP WAF. It reaches the platform over PrivateLink.
+- **Lambda authorizer**: validates the Entra JWT. `api` reads `oid` and groups from the token itself.
+- **Web ALB**: serves the panel and the web app coming from Akamai, also over PrivateLink.
+
+**Services VPC (platform account)**
+
+- **Internal NLB**: the PrivateLink service through which the iDMZ reaches `api`.
+- **Backend (`api`)**: TypeScript on Fargate, stateless. It handles chats, checks access and budget, and creates and launches each run (STS credentials, run token, `InvokeAgentRuntime`). It also serves the SSE, files, OBO and push, and consumes the scheduled tasks queue.
+- **Admin panel and `admin`**: the panel (Next.js) is only the interface. The `admin` service holds the logic: agents, skills, Knowledge Bases, models, budgets, users, evaluations and audit. [The admin panel](#panel).
+- **Web app**: Expo's static export served by nginx.
+- **Run events Lambda**: reads the activity table's stream. On `end` it closes the run with `close(run_id)`, and it pushes notifications about pending approvals. [Lifecycle](#lifecycle).
+- **Cost Lambda**: adds up the spending per user, chat and run from the Bedrock invocation log. It sends the 80 % and 100 % alerts and cuts the user off with an IAM deny.
+- **Watchdog Lambda**: every minute it fails the runs that stopped sending heartbeats.
+- **Chat expiry and chat deletion Lambdas**, with their SQS queue: expire inactive chats and physically delete chats (microVM, S3 and DynamoDB).
+- **EventBridge Scheduler and the tasks SQS queue**: one schedule per task. When a task fires, the message lands in the queue and `api` launches the run. [Operations](#operations).
+
+**Agents VPC**
+
+- **AgentCore Runtime V2 with our kernel** (Python, Strands): one microVM per chat. It runs the agent loop: it calls the model, calls tools through the hub, runs skills and code, writes events to DynamoDB and syncs the chat workspace with S3. The VPC has no egress and is protected by DNS Firewall. [The agent at run time](#agent), [Network and isolation](#network).
+
+**MCP integrations VPC**
+
+- **MCP Hub**: the single door for MCP tools. It verifies the run token and applies the `allow` list, the approvals and OBO. It audits each call and fails closed. [MCP Hub](#hub).
+- **Our own MCPs** (`mcp-documents`, `mcp-time` and others): on Fargate. This is the only VPC connected to the corporate network, which is how MCPs reach internal APIs.
+
+**Regional services**
+
+- **DynamoDB** (four tables: activity, configuration, OBO and audit), **S3** (chats, memory, skills and documents), **KMS**, **Secrets Manager** and **CloudWatch** with X-Ray. [Persistence](#persistence), [End-to-end tracing](#tracing).
+- **Bedrock**: the Claude models, called directly by the kernel. **Knowledge Bases** handle RAG, filtered by agent and group. [Agents, skills, models and knowledge](#governance).
+
+**AgentCore managed services**
+
+- **Code Interpreter**: runs the model's code for the agents in that mode, in its own VPC without DNS, network or credentials.
+- **AgentCore Evaluations**: scores agent quality, online over real sessions and in batch from the panel before a version is published.
+
+### The steps
 
 The twelve steps, as a sequence (the numbers in the list below are those of the architecture diagram; the sequence has its own per-message numbering). The sequence is the error-free case; the 402, 409 and 503 are in steps 4 and 5 and in "Lifecycle".
 

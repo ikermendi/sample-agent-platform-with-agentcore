@@ -4,8 +4,6 @@
 
 The architecture of the agent platform: what it is and its parts, the decisions behind it, how a message travels from the app to the agent and back, and how each piece works, is operated, built and tested.
 
-Pieces: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate · DynamoDB · AgentCore Runtime V2 · Own MCP Hub · Bedrock: Claude · TypeScript + Python · CDK
-
 ## Contents
 
 - [The agent platform](#overview)

@@ -1263,10 +1263,10 @@ Where each piece of data is stored, how long it lasts and how it is deleted: fou
 
 | Table | What it stores | Written by | Read by | Stream and PITR |
 |---|---|---|---|---|
-| **Activity** | Chats (`CHAT#{chat}`) with their consolidated messages and `COST#{run_id}`; with the index of each user's chats (by `oid`, with id, title, last activity and the `deleted` flag: it is what `GET /chats` returns, in full, paginated internally, ), the index of busy chats (by `active_run`) and the expiry index (by `expires_day`); runs (`RUN#{run_id}`: record, `EVT#…` events and approvals); scheduled tasks (`TASK#`); users (`USER#{oid}`: app settings, such as `use_memory`); spending (`USAGE#{oid}#{month}`, the markers per `requestId` and the 80/100 % ones) | `api`; the kernel, only its `RUN#`; the MCP Hub, when marking approvals; `admin` (`cancel`, tasks and users); and the run events, cost, watchdog, chat expiry and chat deletion Lambdas | The same; the kernel, only its `RUN#` and its `USAGE#` | With stream (the run events Lambda); with PITR |
-| **Configuration** | Agents and versions (`AGENT#` / `VERSION#`), skill versions, model catalogue with their prices, limits (`LIMIT#`) and the deny list (`DENY#`) | `admin`; `DENY#`, also the cost Lambda and the watchdog | `api`, `admin` and the cost and watchdog Lambdas. Neither the kernel nor the hub | No stream; with PITR |
-| **OBO** | Entra access tokens and refresh tokens, encrypted with KMS (`OBO#{oid}#{audience}`) | Only `api` | Only `api` | No stream; no PITR |
-| **Audit** | Agent incidents (`AUDIT#{source}#{agent}`) and panel incidents (`AUDIT#panel`), with an index by user and date | Each piece under its own prefix (see "Agent audit") | `admin` | No stream; with PITR |
+| **Activity** | What users do: chats, runs, scheduled tasks, users and spending | `api`; the kernel, only its `RUN#`; the MCP Hub, when marking approvals; `admin` (`cancel`, tasks and users); and the run events, cost, watchdog, chat expiry and chat deletion Lambdas | The same; the kernel, only its `RUN#` and its `USAGE#` | With stream (the run events Lambda); with PITR |
+| **Configuration** | What the panel defines: agents, skills, models, limits and the deny list | `admin`; `DENY#`, also the cost Lambda and the watchdog | `api`, `admin` and the cost and watchdog Lambdas. Neither the kernel nor the hub | No stream; with PITR |
+| **OBO** | Each user's Entra tokens, encrypted with KMS | Only `api` | Only `api` | No stream; no PITR |
+| **Audit** | Agent and panel incidents | Each piece under its own prefix (see "Agent audit") | `admin` | No stream; with PITR |
 
 - **Scope per table, not just per key**: the kernel and the hub only have permissions on the activity and audit tables, and the DynamoDB VPC endpoints in their VPCs only let those two through. So keeping the model's code in local mode away from the configuration and the OBO tokens does not depend on the `dynamodb:LeadingKeys` condition being written correctly: with a mistake in it, it would still not reach those tables. The OBO table is reachable only by `api`.
 - **Restoring the configuration without touching the chats**: PITR restores a whole table into a new table. If a change from the panel breaks agents or limits, the configuration table, which is small, is restored and the affected records are copied over, without having to separate them from millions of events. The panel audit also stores the previous value of each change.
@@ -1274,6 +1274,55 @@ Where each piece of data is stored, how long it lasts and how it is deleted: fou
 - **Different loads**: the activity table receives a write every ~250 ms per active run and is the only one with a stream; the configuration table is written a few times a day and read when each run is launched. Kept apart, the metrics and the throttling alarm of each one mean something, and panel changes do not go through the run events Lambda.
 - **No cross-table transactions**: the one by `api` when creating a run, those of the cost Lambda (`USAGE#` and `COST#`, each with its `requestId` marker) and the kernel's (`status` + `end`) stay within the activity table. `DENY#` was already written separately, with its condition on the version.
 - **Common to all four**: on-demand, encrypted with our CMK, several record types per table distinguished by the key prefix, and per-item TTL where needed (see [Data retention](#retention)).
+
+### What each table holds
+
+Each table holds several record types, told apart by the key prefix. A key written as `PK / SK` gives the partition and sort keys; a key with no `/` has a fixed sort key.
+
+**Activity**
+
+| Record | Key | What it holds | Expires |
+|---|---|---|---|
+| Chat | `CHAT#{chat}` | Owner (`oid`), agent, title, last activity, `active_run`, `expires` and `expires_day`, `deleted`, `test`, and `task` if it has a scheduled task | 12 months after the last activity, 7 days for test chats (chat expiry Lambda, no TTL) |
+| Consolidated message | `CHAT#{chat}` / `MSG#{created}#{run_id}`, with `created` the creation time of the run record (UTC, ISO 8601) | What the user sees of each run: text, summarised cards, files, rating and the last `context` event. Written by `close(run_id)` with `attribute_not_exists`; the key is the same whoever calls it, so repeating it does nothing. The time goes first because in a task's chat the suffix of the `run_id` is a hash, not a ULID, and does not sort | With the chat |
+| Run cost | `CHAT#{chat}` / `COST#{run_id}` | Cost in € of the run's model calls, added up by the cost Lambda | With the chat |
+| Run | `RUN#{run_id}` | `status`, user, agent, version, chat, `traceparent`, `last_heartbeat` and `cancel` (who writes each field: "Who writes what in RUN#{run_id}") | 90 days |
+| Run event | `RUN#{run_id}` / `EVT#000001…`; `end` is `EVT#999999` | One SSE event: text, tool, file, usage, `context`, approval… | 48 h; `end` lasts as long as the run |
+| Approval | `RUN#{run_id}` / `APR#{approval_id}` | Tool, arguments (JSON string), state (pending, granted, rejected, expired, used). Under the run's partition, so the kernel's `dynamodb:LeadingKeys` already cover it | 30 days |
+| Scheduled task | `TASK#{task_id}` (`task_id` is what the chat stores in `task` and what the Scheduler schedule points to) | Owner, its chat, agent, frequency, last and next run, failures and state (active or paused) | No TTL: the watchdog deletes those paused for 90 days |
+| User | `USER#{oid}` | Name, email, groups, first and last sign-in, `status` (active or deactivated) and app settings (`use_memory`) | No TTL: a user is deactivated, not deleted, and the panel and the audit refer to them |
+| Monthly spend | `USAGE#{oid}#{month}` | Total in € for the month and the 80/100 % notice markers | 13 months |
+| Dedup marker | `USAGE#{oid}#{month}` / `REQ#{requestId}` and `CHAT#{chat}` / `REQ#{requestId}` | One per `requestId` and per transaction, in the same partition as the sum it guards (`attribute_not_exists`), so a repeated log record is not added twice | A few days |
+
+Indexes: the user's chats (by `oid`, with id, title, last activity and `deleted`; it is what `GET /chats` returns), the user's tasks (by `oid`, on `TASK#`; for the app and the panel), busy chats (sparse, by `active_run`; read by the watchdog) and expiry (sparse, by `expires_day`; read by the chat expiry Lambda).
+
+**Configuration**
+
+| Record | Key | What it holds |
+|---|---|---|
+| Agent | `AGENT#{id}` | The editable draft and the `published` pointer |
+| Agent version | `AGENT#{id}` / `VERSION#{n}` | The immutable published version, with hash, author and date |
+| Skill version | `SKILL#{id}` / `VERSION#{n}` | Each approved `skill@version` with its hash, immutable like the agent versions |
+| Model | `MODEL#{id}` | A catalogue entry: model id, price per token, context window and whether it is active |
+| Limit | `LIMIT#DEFAULT`, `LIMIT#GROUP#{id}`, `LIMIT#USER#{oid}` | Monthly budget per rule |
+| Deny entry | `DENY#…` | Who has hit the limit this month; emptied on day 1 |
+
+None expires: it is configuration and is deleted by hand.
+
+**OBO**
+
+| Record | Key | What it holds | Expires |
+|---|---|---|---|
+| Token | `OBO#{oid}#{audience}` | Entra access token and refresh token, encrypted with KMS | 90 days |
+
+**Audit**
+
+| Record | Key | What it holds | Expires |
+|---|---|---|---|
+| Agent incident | `AUDIT#{source}#{agent}` / `{date}#{id}`, with source `hub`, `kernel` or `platform` | What happened, to whom and in which run (see "Agent audit") | 12 months |
+| Panel incident | `AUDIT#panel` / `{date}#{id}` | Administrator, object, previous value and new value | 12 months |
+
+Index: by user and date, for the panel.
 
 ### S3
 
@@ -1319,6 +1368,7 @@ No AgentCore Memory: everything is files in the workspaces bucket, under the use
 | Bedrock invocation logging (metadata only) | CloudWatch Logs | 90 days | Reconciliation with the bill and support; carries no text |
 | Chats and consolidated messages | DynamoDB, activity | 12 months from the last activity; 7 days for the evaluations' test chats (no TTL: the chat expiry Lambda finds them by `expires_day`) | The user can delete earlier, with `deleteChat` and the chat deletion Lambda, as on expiry |
 | Spending counters | DynamoDB, activity | 13 months | Reconciliation with the bill |
+| Users (`USER#{oid}`) | DynamoDB, activity | No TTL | A user is deactivated, not deleted; the panel and the audit refer to them |
 | OBO tokens (encrypted) | DynamoDB, OBO | 90 days | How long an Entra refresh token lasts unused |
 | Audit | DynamoDB, audit | 12 months | Encrypted with the CMK; the kernel only writes under `AUDIT#kernel#{agent}` |
 | Agents, versions, skills, limits, catalogue | DynamoDB, configuration | No TTL | It is configuration: deleted by hand |

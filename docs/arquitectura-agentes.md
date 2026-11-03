@@ -1294,7 +1294,12 @@ Each table holds several record types, told apart by the key prefix. A key writt
 | Monthly spend | `USAGE#{oid}#{month}` | Total in € for the month and the 80/100 % notice markers | 13 months |
 | Dedup marker | `USAGE#{oid}#{month}` / `REQ#{requestId}` and `CHAT#{chat}` / `REQ#{requestId}` | One per `requestId` and per transaction, in the same partition as the sum it guards (`attribute_not_exists`), so a repeated log record is not added twice | A few days |
 
-Indexes: the user's chats (by `oid`, with id, title, last activity and `deleted`; it is what `GET /chats` returns), the user's tasks (by `oid`, on `TASK#`; for the app and the panel), busy chats (sparse, by `active_run`; read by the watchdog) and expiry (sparse, by `expires_day`; read by the chat expiry Lambda).
+| Index | Key | Over | What it returns | Read by |
+|---|---|---|---|---|
+| User's chats | `oid` | `CHAT#` | Id, title, last activity and `deleted` of each chat: what `GET /chats` returns | `api` |
+| User's tasks | `oid` | `TASK#` | The user's scheduled tasks | `api` (the app) and `admin` (the panel) |
+| Busy chats | `active_run` (sparse) | `CHAT#` | The chats with a run in progress | Watchdog |
+| Expiry | `expires_day` (sparse) | `CHAT#` | The chats that expire each day | Chat expiry Lambda |
 
 **Configuration**
 
@@ -1322,7 +1327,9 @@ None expires: it is configuration and is deleted by hand.
 | Agent incident | `AUDIT#{source}#{agent}` / `{date}#{id}`, with source `hub`, `kernel` or `platform` | What happened, to whom and in which run (see "Agent audit") | 12 months |
 | Panel incident | `AUDIT#panel` / `{date}#{id}` | Administrator, object, previous value and new value | 12 months |
 
-Index: by user and date, for the panel.
+| Index | Key | Over | What it returns | Read by |
+|---|---|---|---|---|
+| By user | User and date | `AUDIT#…` | A user's incidents, by date | `admin` (the panel) |
 
 ### S3
 

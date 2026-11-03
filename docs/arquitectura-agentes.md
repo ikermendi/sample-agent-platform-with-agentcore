@@ -7,6 +7,7 @@ The architecture of the agent platform: what it is and its parts, the decisions 
 ## Contents
 
 - [The agent platform](#overview)
+- [Glossary](#glossary)
 - [Key decisions](#decisions)
 - [A message's journey](#journey)
 - [Inventory and network](#accounts)
@@ -60,7 +61,66 @@ flowchart LR
 
 The app sends the user's message to the backend. The backend checks access and budget, creates the run and launches it in the chat's microVM. There the kernel runs the agent loop: it calls the model in Bedrock and, through the MCP Hub, the tools that reach internal systems. The kernel writes each event to DynamoDB, and the backend streams it to the app over SSE.
 
-The decisions behind this design come next. The detailed diagram, with accounts and VPCs, what each piece does and how they work together for one message are in [A message's journey](#journey).
+The glossary and the decisions behind this design come next. The detailed diagram, with accounts and VPCs, what each piece does and how they work together for one message are in [A message's journey](#journey).
+
+<a id="glossary"></a>
+
+## Glossary
+
+**Platform**
+
+| Term | What it is |
+|---|---|
+| **iDMZ** | The AWS account at the edge: the API Gateway the app calls and the load balancer of the panel and the web app. It reaches the platform account only over PrivateLink. |
+| **`oid`** | The user's immutable identifier in Entra ID. It keys everything per user: chats, runs, spending and the S3 folders. |
+| **Kernel** | Our own agent runtime (Python, Strands) that runs on AgentCore Runtime V2. A single kernel runs every agent: it builds the agent from its version and runs the loop. |
+
+**Agents**
+
+| Term | What it is |
+|---|---|
+| **Agent** | What the user chats with: a profile (name, description, icon and the Entra groups that see it) and its published version. |
+| **Agent version** | Everything that changes how the agent answers: instructions, model, allowed tools, skills, subagents, Knowledge Bases, how it runs code, memory and confirmations. Each published version is immutable; a pointer says which one is in use, and each new message uses the one published at that moment. |
+| **Skill** | Instructions, scripts and `tools.yaml` versioned from the panel; its scripts are exposed to the model as tools when the skill is activated. |
+| **Subagent** | Another Strands agent inside the same kernel, exposed to the main agent as a tool, with its own `allow` list. |
+
+**Running**
+
+| Term | What it is |
+|---|---|
+| **Run** | One turn of the agent: from when the backend receives a message (or a task fires) until the `end` event. It has a status, lasts one hour at most and is identified by `run_id` = `{oid}.{suffix}` (the suffix is a ULID in a chat and a hash of the task and its time in a scheduled task; see "No duplicate runs"). The `run_id` is also the session name of its STS credentials, so the Bedrock invocation log says which user and which run each model call belongs to. |
+| **Runtime session** | The AgentCore microVM of a chat; one per chat (`runtimeSessionId` = HMAC(secret, `oid` \| chat), 64 hexadecimal characters). It runs the chat's runs one after another; it stops after 15 minutes without use or at 8 h of lifetime, and the next invocation with the same id starts a new, empty microVM. |
+| **Snapshot** | Two different things. The **Runtime V2 snapshot** is the image AgentCore takes of the kernel's container once it is healthy; each new microVM starts from it, without any chat state. The **conversation snapshot** (`snapshot_latest.json`) is the agent conversation that Strands saves in S3; the kernel loads it to rebuild a chat on a new microVM. |
+| **`active_run`** | Chat attribute, holding the `run_id`, that prevents two runs at once; `api` sets it when creating the run (from a message or from a task) and `close(run_id)` removes it when it sees the `end` of that same run. A sparse index on it gives the busy chats, which is what the watchdog goes through. |
+| **`previous_interrupted`** | Optional field of the payload with the reason the chat's previous run died or was cancelled, so that the kernel adds a note and the model's conversation matches the user's. |
+
+**Identity and tools**
+
+| Term | What it is |
+|---|---|
+| **Session STS credentials** | One-hour AWS credentials that `api` creates for each run when launching it and passes in the payload; not renewed. They are limited to the models of the agent version and to that user's and chat's data. |
+| **Run token** | A token signed with KMS by `api` when launching the run: user, groups, agent, version and the `allow` list. The kernel checks it before accepting an invocation, and the MCP Hub and the backend use it to know which run is calling. It is not IAM and it is not the Entra token. |
+| **`allow` list** | The hub tools an agent version may use, configured in the panel. `api` puts the list (of the agent and its subagents) in the run token, and the MCP Hub denies any tool that is not in it. |
+| **Approval** | The user's confirmation before a sensitive tool runs (those marked `confirm: true`). The run waits up to 10 minutes; the MCP Hub only lets the call through with a granted approval of that run. |
+| **OBO** | On-behalf-of: an Entra token for a specific MCP, obtained from the user's token, with which the MCP acts as the user. Only `api` stores and renews them. |
+| **Run identity** | The other way, besides OBO, of identifying the user to an MCP: the MCP receives the user's data from the run token and acts with its own role. |
+
+**Chat data**
+
+| Term | What it is |
+|---|---|
+| **Chat workspace** | The S3 prefix `workspaces/{user}/{chat}/` (`input/`, `work/`, `output/`) that the kernel syncs with its local folder. In the same prefix, outside the sync, is `conversation/` (the agent conversation). |
+| **Agent conversation** | What the model sees of a chat: the Strands messages, with tools and results (large results trimmed), in one JSON file (`snapshot_latest.json`) per agent in `workspaces/{user}/{chat}/conversation/`. The kernel writes and loads it with Strands' `SnapshotSessionManager`. Not to be confused with the consolidated message, which is what the user sees. |
+| **Stash** | Where the kernel's context manager stores each block of the conversation as it arrives, including the original of what it trims, in the chat's `conversation/` in S3. The model gets it back with the `retrieve_context` tool. |
+| **User memory** | Two text files in `workspaces/{user}/memory/` (`preferences.md` and `facts.md`), shared by all of the user's agents. The kernel puts them in the prompt; the model changes them with the `remember` tool and the user, from the app. |
+| **Consolidated message** | The chat item that `close(run_id)` stores (normally from the run events Lambda) when a run finishes: text, summarised cards, files and rating; its cost is next to it, in the chat's `COST#{run_id}`, which the cost Lambda adds up. It is what the user sees; the conversation the model sees is another file, in the chat's `conversation/` in S3. |
+
+**Shared functions**
+
+| Term | What it is |
+|---|---|
+| **`close(run_id)`** | Function in `packages/domain`, idempotent step by step, that closes a run with `end`: consolidated message, removal of `active_run`, push. It does not touch the cost: the cost Lambda adds it up from the Bedrock invocation log. It is called by the run events Lambda (normal path), the watchdog (fallback) and `api` (when a send collides with a run that has already finished). |
+| **`deleteChat`** | Function in `packages/domain`, the only one that starts the deletion of a chat: it marks it `deleted`, sets `cancel`, deletes its tasks and puts it in the chat deletion queue. It is called by `api` (the user) and the chat expiry Lambda (after 12 months without activity, or after 7 days for evaluation chats). The panel does not delete chats. |
 
 <a id="decisions"></a>
 
@@ -90,26 +150,6 @@ The decisions behind this design come next. The detailed diagram, with accounts 
 - Entry through an iDMZ account (API Gateway REST with streaming and a Lambda authorizer that only validates the Entra JWT; `api` reads `oid` and groups from the token itself); Akamai only in front of the panel and the web app.
 - Everything in CDK, in a monorepo (TypeScript + Python) with a shared contract in JSON Schema.
 - Test environment in a single account, with the VPCs and scheduled shutdowns; what has been checked (in the code, locally and with the probes against AWS) is in [Verified](#verified) and what remains to be tested, in [To verify](#to-verify).
-
-### Glossary
-
-| Term | What it is |
-|---|---|
-| **Run** | One turn of the agent: from when the backend receives a message (or a task fires) until the `end` event. It has `run_id` = `{oid}.{suffix}`: the user's `oid` in hexadecimal without hyphens and in lowercase (32 characters), a dot and a 26-character suffix in base32 and in uppercase (in a chat, a ULID generated by the app; in a task, the first 26 characters in RFC 4648 base32 of SHA-256(task | scheduled time), which never carry the `=` padding, so that a repeated delivery gives the same id). That is 59 characters, within the 64 of an STS session name: so the `run_id` is also the session name of its credentials and the Bedrock invocation log says which user and which run each call belongs to. It also has a status and lasts one hour at most. |
-| **Runtime session** | The AgentCore microVM of a chat; one per chat (`runtimeSessionId` = HMAC(secret, `oid` \| chat), 64 hexadecimal characters). It runs the chat's runs one after another; it stops after 15 minutes without use or at 8 h of lifetime, and the next invocation with the same id starts a new, empty microVM. |
-| **Run's STS credentials** | One-hour AWS credentials that `api` creates for that run when launching it (in the tables, "session STS credentials"), limited to its agent, its user and its chat. |
-| **Run token** | A token signed with KMS by `api` when launching the run, which identifies the run to the MCP Hub and the backend: user, groups, agent, version and the `allow` list. It is not IAM and it is not the Entra token. |
-| **Run identity / OBO** | Two ways of identifying the user to an MCP: passing it the data from the run token (the MCP uses its own role) or giving it an Entra OBO token with the MCP's audience (the MCP acts as the user). |
-| **Agent conversation** | What the model sees of a chat: the Strands messages, with tools and results (large results trimmed; the stash, in the same folder, stores each block as it arrives, including the original of what was trimmed), in one JSON file (`snapshot_latest.json`) per agent in `workspaces/{user}/{chat}/conversation/`. The kernel writes and loads it with Strands' `SnapshotSessionManager`. Not to be confused with the consolidated message, which is what the user sees. |
-| **User memory** | Two text files in `workspaces/{user}/memory/` (`preferences.md` and `facts.md`), shared by all of the user's agents. The kernel puts them in the prompt; the model changes them with the `remember` tool and the user, from the app. |
-| **`previous_interrupted`** | Optional field of the payload with the reason the chat's previous run died or was cancelled, so that the kernel adds a note and the model's conversation matches the user's. |
-| **Chat workspace** | The S3 prefix `workspaces/{user}/{chat}/` (`input/`, `work/`, `output/`) that the kernel syncs with its local folder. In the same prefix, outside the sync, is `conversation/` (the agent conversation). |
-| **Skill** | Instructions, scripts and `tools.yaml` versioned from the panel; its scripts are exposed to the model as tools when the skill is activated. |
-| **Subagent** | Another Strands agent inside the same kernel, exposed to the main agent as a tool, with its own `allow` list. |
-| **Consolidated message** | The chat item that `close(run_id)` stores (normally from the run events Lambda) when a run finishes: text, summarised cards, files and rating; its cost is next to it, in the chat's `COST#{run_id}`, which the cost Lambda adds up. It is what the user sees; the conversation the model sees is another file, in the chat's `conversation/` in S3. |
-| **`active_run`** | Chat attribute, holding the `run_id`, that prevents two runs at once; `api` sets it when creating the run (from a message or from a task) and `close(run_id)` removes it when it sees the `end` of that same run. A sparse index on it gives the busy chats, which is what the watchdog goes through. |
-| **`deleteChat`** | Function in `packages/domain`, the only one that starts the deletion of a chat: it marks it `deleted`, sets `cancel`, deletes its tasks and puts it in the chat deletion queue. It is called by `api` (the user) and the chat expiry Lambda (after 12 months without activity, or after 7 days for evaluation chats). The panel does not delete chats. |
-| **`close(run_id)`** | Function in `packages/domain`, idempotent step by step, that closes a run with `end`: consolidated message, removal of `active_run`, push. It does not touch the cost: the cost Lambda adds it up from the Bedrock invocation log. It is called by the run events Lambda (normal path), the watchdog (fallback) and `api` (when a send collides with a run that has already finished). |
 
 <a id="journey"></a>
 
@@ -228,7 +268,7 @@ sequenceDiagram
 2. **Send.** `POST /chats/{id}/runs` with a `run_id` (`{oid}.{ULID}`) generated by the app, to the iDMZ API Gateway REST; the Lambda authorizer validates the JWT (signature, issuer, audience, expiry) and `api` reads `oid` and groups from the token itself.
 3. **Entry to the platform.** PrivateLink to the internal NLB and any replica of the backend on Fargate.
 4. **Checks and creation.** The backend checks that the user can use the agent (Entra groups) and has budget left (if not, 402); it creates the run (`pending`) and sets `active_run` on the chat (if there is already one, 409); it seeds the missing OBO tokens. [Lifecycle](#lifecycle), [Identity and permissions](#identity).
-5. **Start.** `api` itself issues the STS credentials and the run token and calls `InvokeAgentRuntime` with the chat session: if the chat's microVM is still alive, the invocation lands in it (warm); if not, AgentCore starts a new one from the snapshot. The kernel moves the run to `running`, accepts instantly and continues in the background (`/ping` in `HealthyBusy`); `api` responds `202 {run_id}`. If AgentCore rejects due to quota (429) or with a 409 (`RetryableConflictException`, session changing state), `api` retries with backoff for a few seconds; if it does not succeed, it closes the run and responds 503, and the app keeps the message to retry it. The payload carries the message, the agent version, the budget limit, the credentials and the run token (and, if the chat's previous run died or was cancelled, the reason); if the kernel has the chat's `Agent` in memory and it is of the same version, it uses it; if not, it builds it from S3 (the chat's `conversation/`). It always reads the user memory (with the `Agent` in memory, with a conditional `GET`).
+5. **Start.** `api` itself issues the STS credentials and the run token and calls `InvokeAgentRuntime` with the chat session: if the chat's microVM is still alive, the invocation lands in it (warm); if not, AgentCore starts a new one from the Runtime V2 snapshot. The kernel moves the run to `running`, accepts instantly and continues in the background (`/ping` in `HealthyBusy`); `api` responds `202 {run_id}`. If AgentCore rejects due to quota (429) or with a 409 (`RetryableConflictException`, session changing state), `api` retries with backoff for a few seconds; if it does not succeed, it closes the run and responds 503, and the app keeps the message to retry it. The payload carries the message, the agent version, the budget limit, the credentials and the run token (and, if the chat's previous run died or was cancelled, the reason); if the kernel has the chat's `Agent` in memory and it is of the same version, it uses it; if not, it builds it from S3 (the chat's `conversation/`). It always reads the user memory (with the `Agent` in memory, with a conditional `GET`).
 6. **Model.** The kernel (Strands) calls Bedrock through the agents VPC's VPC endpoints with the STS credentials, limited to the models of that version; before each call it checks the month's spending. The cutoff that does not depend on it is the IAM deny on `aws:SourceIdentity`. [The agent at run time](#agent).
 7. **MCP tools.** All through the MCP Hub (integrations VPC, over PrivateLink) with the run token: `allow` list, approvals, run identity or OBO (requested from the backend), audit, and it fails closed. [Network](#network), [Identity](#identity).
 8. **Skills, code and files.** Skill scripts run in the kernel as typed tools; the model's code, in the microVM (local mode) or in Code Interpreter; the kernel syncs the chat workspace with S3 and emits `file` for each new file. [The agent at run time](#agent).
@@ -750,6 +790,7 @@ With any `end`, `close(run_id)` closes the run: it saves the consolidated messag
 
 ### No duplicate runs
 
+- **The `run_id`**: `{oid}.{suffix}`. The `oid` goes in hexadecimal without hyphens and in lowercase (32 characters), followed by a dot and a 26-character suffix in base32 and in uppercase. In a chat the suffix is a ULID generated by the app; in a task, the first 26 characters in RFC 4648 base32 of SHA-256(task | scheduled time), which never carry the `=` padding, so that a repeated delivery gives the same id. That is 59 characters, within the 64 of an STS session name, which is why the `run_id` can also be the session name of its credentials.
 - **App → backend**: the `run_id` is generated by the app (`{oid}.{ULID}`, one per message) and is the key of `RUN#`; `api` checks that it starts with the JWT's `oid` and that the suffix is a ULID, and if not, answers 400: nobody can charge their spending to another user by choosing the `run_id`; `api` writes it with `attribute_not_exists` in the same transaction that sets `active_run`. If the app retries, the transaction fails with "already exists" and `api` answers the same `202 {run_id}`; if it fails because of `active_run` and that run still has no `end`, it answers 409 (if it already has `end`, it closes it with `close(run_id)` and continues). No separate idempotency header or key.
 - **Startup**: `InvokeAgentRuntime` has no idempotency token, but none is needed: the `active_run` transaction prevents two runs in the same chat, and a repeated invocation of the same run (an `api` retry, or a repeated delivery from the task queue) is stopped by the conditional move from `pending` to `running` and by the list of already accepted `run_id`s the kernel keeps. If the repeated invocation lands on a new microVM (the previous one died), the conditional move fails and the kernel does nothing. In tasks, the `run_id` is `{oid}.` followed by the first 26 base32 characters of `hash(task, scheduled time)`, with the time Scheduler puts in the message with `<aws.scheduler.scheduled-time>`, so a repeated delivery of the same firing yields the same run and the transaction fails with "already exists". The only gap, an `api` that dies between creating the run and invoking, is closed by the watchdog after 2 minutes in `pending`.
 - **Every state change is conditional**: each step (see "Run states") is a conditional write from the previous state.

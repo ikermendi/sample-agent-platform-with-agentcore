@@ -8,8 +8,8 @@ Pieces: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate
 
 ## Contents
 
+- [The agent platform](#overview)
 - [Key decisions](#decisions)
-- [Diagram](#diagram)
 - [A message's journey](#journey)
 - [Inventory and network](#accounts)
 - [The app](#app)
@@ -28,6 +28,75 @@ Pieces: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate
 - [Migration](#migration)
 - [Verified](#verified)
 - [To verify](#to-verify)
+
+<a id="overview"></a>
+
+## The agent platform
+
+The platform gives the company's employees AI agents they use from a single app, on iOS and on the web. Each agent is a Bedrock model with its own instructions, skills, MCP tools and knowledge bases, and administrators publish and govern it from a panel. A user chats with an agent, or schedules it as a task. The agent runs in its own isolated microVM, calls the models directly and reaches internal systems only through the MCP Hub, on the user's behalf. Each step streams back to the app and is recorded, costed and audited.
+
+Three ideas shape it:
+
+- **Agents are configuration, not code.** An agent version is a model, a prompt, skills, the allowed tools and knowledge bases, published from the panel. A single kernel runs all of them.
+- **The agent never holds the user's token.** Each run gets its own STS credentials and a signed run token. Anything that touches an internal system goes through the hub, which applies the allowed tools, the confirmations and OBO.
+- **The agents are closed in.** Nothing in the agents VPC reaches the internet or the corporate network. The model's free-form code runs either inside the microVM or in Code Interpreter in a VPC without DNS.
+
+<a id="diagram"></a>
+
+![Architecture diagram](arquitectura-agentes.svg)
+
+Legend: iDMZ account · Platform account · AgentCore and kernel · Data flow · Control / authentication · Journey step
+
+The numbers are the steps of [a message's journey](#journey). Dashed lines are control: authentication, OBO tokens and the push notification. The minimal Code Interpreter VPC is not drawn (see "The four VPCs").
+
+### The parts
+
+**Outside the platform**
+
+- **Expo app** (iOS and web, assistant-ui): chats with agents, files, scheduled tasks and memory. It signs in with Entra and follows each run over SSE. [The app](#app).
+- **Microsoft Entra ID**: sign-in, MFA and conditional access. Its groups decide which agents each user sees and the roles in the panel. It also issues the OBO tokens. [Identity and permissions](#identity).
+- **Akamai**: CDN and WAF in front of the panel and the web app (the app's API does not go through it).
+- **Netskope**: the only exit to the internet (Entra, APNs, Web Push).
+- **APNs and Web Push**: notify the user when a run ends or is waiting for an approval.
+
+**iDMZ account**
+
+- **API Gateway REST**: the only public entry for the app, with response streaming for SSE and a per-IP WAF. It reaches the platform over PrivateLink.
+- **Lambda authorizer**: validates the Entra JWT. `api` reads `oid` and groups from the token itself.
+- **Web ALB**: serves the panel and the web app coming from Akamai, also over PrivateLink.
+
+**Services VPC (platform account)**
+
+- **Internal NLB**: the PrivateLink service through which the iDMZ reaches `api`.
+- **Backend (`api`)**: TypeScript on Fargate, stateless. It handles chats, checks access and budget, and creates and launches each run (STS credentials, run token, `InvokeAgentRuntime`). It also serves the SSE, files, OBO and push, and consumes the scheduled tasks queue.
+- **Admin panel and `admin`**: the panel (Next.js) is only the interface. The `admin` service holds the logic: agents, skills, Knowledge Bases, models, budgets, users, evaluations and audit. [The admin panel](#panel).
+- **Web app**: Expo's static export served by nginx.
+- **Run events Lambda**: reads the activity table's stream. On `end` it closes the run with `close(run_id)`, and it pushes notifications about pending approvals. [Lifecycle](#lifecycle).
+- **Cost Lambda**: adds up the spending per user, chat and run from the Bedrock invocation log. It sends the 80 % and 100 % alerts and cuts the user off with an IAM deny.
+- **Watchdog Lambda**: every minute it fails the runs that stopped sending heartbeats.
+- **Chat expiry and chat deletion Lambdas**, with their SQS queue: expire inactive chats and physically delete chats (microVM, S3 and DynamoDB).
+- **EventBridge Scheduler and the tasks SQS queue**: one schedule per task. When a task fires, the message lands in the queue and `api` launches the run. [Operations](#operations).
+
+**Agents VPC**
+
+- **AgentCore Runtime V2 with our kernel** (Python, Strands): one microVM per chat. It runs the agent loop: it calls the model, calls tools through the hub, runs skills and code, writes events to DynamoDB and syncs the chat workspace with S3. The VPC has no egress and is protected by DNS Firewall. [The agent at run time](#agent), [Network and isolation](#network).
+
+**MCP integrations VPC**
+
+- **MCP Hub**: the single door for MCP tools. It verifies the run token and applies the `allow` list, the approvals and OBO. It audits each call and fails closed. [MCP Hub](#hub).
+- **Our own MCPs** (`mcp-documents`, `mcp-time` and others): on Fargate. This is the only VPC connected to the corporate network, which is how MCPs reach internal APIs.
+
+**Regional services**
+
+- **DynamoDB** (four tables: activity, configuration, OBO and audit), **S3** (chats, memory, skills and documents), **KMS**, **Secrets Manager** and **CloudWatch** with X-Ray. [Persistence](#persistence), [End-to-end tracing](#tracing).
+- **Bedrock**: the Claude models, called directly by the kernel. **Knowledge Bases** handle RAG, filtered by agent and group. [Agents, skills, models and knowledge](#governance).
+
+**AgentCore managed services**
+
+- **Code Interpreter**: runs the model's code for the agents in that mode, in its own VPC without DNS, network or credentials.
+- **AgentCore Evaluations**: scores agent quality, online over real sessions and in batch from the panel before a version is published.
+
+The decisions behind this design come next. How the pieces work together for one message is in [A message's journey](#journey).
 
 <a id="decisions"></a>
 
@@ -77,16 +146,6 @@ Pieces: Expo + assistant-ui · Entra ID · API Gateway REST + SSE · ECS Fargate
 | **`active_run`** | Chat attribute, holding the `run_id`, that prevents two runs at once; `api` sets it when creating the run (from a message or from a task) and `close(run_id)` removes it when it sees the `end` of that same run. A sparse index on it gives the busy chats, which is what the watchdog goes through. |
 | **`deleteChat`** | Function in `packages/domain`, the only one that starts the deletion of a chat: it marks it `deleted`, sets `cancel`, deletes its tasks and puts it in the chat deletion queue. It is called by `api` (the user) and the chat expiry Lambda (after 12 months without activity, or after 7 days for evaluation chats). The panel does not delete chats. |
 | **`close(run_id)`** | Function in `packages/domain`, idempotent step by step, that closes a run with `end`: consolidated message, removal of `active_run`, push. It does not touch the cost: the cost Lambda adds it up from the Bedrock invocation log. It is called by the run events Lambda (normal path), the watchdog (fallback) and `api` (when a send collides with a run that has already finished). |
-
-<a id="diagram"></a>
-
-## Diagram
-
-The numbers are the steps of a message's journey, just below. Dashed lines are control: authentication, OBO tokens and the push notification. The minimal Code Interpreter VPC is not drawn (see "The four VPCs").
-
-![Architecture diagram](arquitectura-agentes.svg)
-
-Legend: iDMZ account · Platform account · AgentCore and kernel · Data flow · Control / authentication · Journey step
 
 <a id="journey"></a>
 

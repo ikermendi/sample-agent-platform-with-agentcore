@@ -88,7 +88,7 @@ The glossary and the decisions behind this design come next. The detailed diagra
 
 | Term | What it is |
 |---|---|
-| **Run** | One turn of the agent: from when the backend receives a message (or a task fires) until the `end` event. It has a status, lasts one hour at most and is identified by `run_id` = `{oid}.{suffix}` (the suffix is a ULID in a chat and a hash of the task and its time in a scheduled task; see "No duplicate runs"). The `run_id` is also the session name of its STS credentials, so the Bedrock invocation log says which user and which run each model call belongs to. |
+| **Run** | One turn of the agent: from when the backend receives a message (or a task fires) until the `end` event. It has a status, lasts one hour at most and is identified by `run_id` = `{oid}.{suffix}` (the suffix is a ULID in a chat and a hash of the task and its time in a scheduled task; see "Run idempotency"). The `run_id` is also the session name of its STS credentials, so the Bedrock invocation log says which user and which run each model call belongs to. |
 | **Runtime session** | The AgentCore microVM of a chat; one per chat (`runtimeSessionId` = HMAC(secret, `oid` \| chat), 64 hexadecimal characters). It runs the chat's runs one after another; it stops after 15 minutes without use or at 8 h of lifetime, and the next invocation with the same id starts a new, empty microVM. |
 | **Snapshot** | Two different things. The **Runtime V2 snapshot** is the image AgentCore takes of the kernel's container once it is healthy; each new microVM starts from it, without any chat state. The **conversation snapshot** (`snapshot_latest.json`) is the agent conversation that Strands saves in S3; the kernel loads it to rebuild a chat on a new microVM. |
 | **`active_run`** | Chat attribute, holding the `run_id`, that prevents two runs at once; `api` sets it when creating the run (from a message or from a task) and `close(run_id)` removes it when it sees the `end` of that same run. A sparse index on it gives the busy chats, which is what the watchdog goes through. |
@@ -609,11 +609,12 @@ sequenceDiagram
   Note over K,D: repeats until end_turn, cancel, limit, expired approval, error or 55 minutes. When finished: StopCodeInterpreterSession if it opened one, status + end in one transaction and Sandbox cleanup (see "Runtime V2 and what it requires of the kernel")
 ```
 
-### Why our own kernel
+### What the kernel is
 
-- No AgentCore Gateway, Identity or interceptor: our own kernel calls Bedrock, Code Interpreter and S3 directly with the session STS credentials, and all MCP tools go through our MCP Hub; skill scripts run in the kernel itself.
-- A single path and a single security logic, in our code: what can be limited by IAM goes direct; what depends on who the user is (data, internal APIs, OBO) goes through the hub.
-- In exchange, the kernel image, the hub and the Strands updates are ours to maintain.
+- **Our own agent runtime**, in Python with Strands, packaged as a container image and run on AgentCore Runtime V2. It is the same image for every agent: it receives the agent version in the payload, builds the Strands agent from it and runs the loop.
+- **What it calls directly**, with the session STS credentials: Bedrock (the model), Code Interpreter, S3 (workspace, conversation, memory and skills) and DynamoDB (the run's events). That is what IAM can limit by itself.
+- **What goes through the MCP Hub**: every MCP tool, that is, anything that depends on who the user is (internal data and APIs, OBO). Skill scripts run inside the kernel as typed tools. There is no AgentCore Gateway, Identity or interceptor in between.
+- **What it costs to maintain**: the kernel image, the hub and the Strands updates are ours.
 
 ### Runtime V2 and what it requires of the kernel
 
@@ -649,7 +650,7 @@ sequenceDiagram
 ### Events written by the kernel
 
 - **The kernel writes its events directly to DynamoDB** (`RUN#{run_id}` / `EVT#000042`), through the VPC endpoint and with the session STS credentials, which only allow writing to that run's keys (`dynamodb:LeadingKeys`).
-- **Why:** if the backend restarts, the agent keeps reporting and the app loses nothing; the backend is free once the run has started; and it is cheap and fast (writes batched every ~250 ms, without leaving AWS). Which call writes each batch (`BatchWriteItem` or one write per event) is still to be decided, and the list of IAM actions of the session depends on it (see "Local code execution" in [To verify](#to-verify)).
+- **What it gives:** if the backend restarts, the agent keeps reporting and the app loses nothing; the backend is free once the run has started; and it is cheap and fast (writes batched every ~250 ms, without leaving AWS). Which call writes each batch (`BatchWriteItem` or one write per event) is still to be decided, and the list of IAM actions of the session depends on it (see "Local code execution" in [To verify](#to-verify)).
 - **Risk:** within its run it could write fake events if someone ran code in the kernel process. In agents with Code Interpreter this does not happen (the model's code goes to another microVM); in local-mode agents, the model's code runs as another user and without the session credentials (see "Running the model's code"), so it would only happen if that separation failed, and always within its own run.
 - **Cost does not depend on these events:** the usage the kernel writes only serves to show it while responding; the one that counts comes from the Bedrock invocation log (see "Per-user usage control"). A compromised kernel can falsify what is shown in its own chat, not what is billed.
 - **Discarded alternative:** sending the events to an internal backend endpoint and having it write them. It would centralise validation, but it requires a network path from the agents VPC to the backend, which the design deliberately avoids (see "Network and isolation"), and moreover, if the backend is unavailable, the agent cannot report its progress.
@@ -686,10 +687,10 @@ sequenceDiagram
 
 The agent conversation (Strands snapshot) and the user memory are files in S3 that the kernel reads and writes with the session credentials: see [Conversation and memory (S3)](#conversation) in Persistence.
 
-### No browsing or web search
+### Where the agent gets information
 
-- **Decided**: agents do not go out to the internet. Neither AgentCore Browser is used (a managed Chrome that would require a browsing VPC with egress through Netskope, recordings and domain policies) nor AgentCore's managed Web Search, which is only exposed as a target of an AgentCore Gateway (checked in the SDK, `bedrock_agentcore/tools/web_search_client.py`), and we do not want Gateway.
-- **What they do have**: the Knowledge Bases (company documents) and the corporate network's MCPs. If a skill needs outside data, it is brought in as documents or through our own MCP against a specific API, which goes through the hub, the `allow` list and the audit.
+- **Sources**: the Knowledge Bases (company documents) and the corporate network's MCPs, both through the hub. If a skill needs outside data, it is brought in as documents or through our own MCP against a specific API, which goes through the hub, the `allow` list and the audit.
+- **No internet**: agents have no browser or web search. AgentCore Browser is a managed Chrome that would require a browsing VPC with egress through Netskope, recordings and domain policies; AgentCore's managed Web Search is only exposed as a target of an AgentCore Gateway (checked in the SDK, `bedrock_agentcore/tools/web_search_client.py`), which the platform does not use.
 - **If it is ever needed**: the least invasive option would be our own search MCP against a contracted search API, in the integrations VPC, with egress through Netskope; never a browser in the model's hands.
 
 ### Running the model's code
@@ -788,7 +789,7 @@ With any `end`, `close(run_id)` closes the run: it saves the consolidated messag
 - **Retries when invoking**: if AgentCore answers 429 (quota), or 409 (`RetryableConflictException`: the chat's session is starting or stopping; the API model asks to retry with backoff), `api` retries with increasing, randomised backoff, with a total cap of about 15 s, below the maximum time for a non-streaming request in API Gateway. A 402 (`ServiceQuotaExceededException`) is not fixed in seconds: it is not retried. If it does not succeed, it moves the run to `failed` with `end` (`error`), conditional from `pending`, and answers 503; the app keeps the message in its queue to retry it. If the invocation is in doubt (it was cut off after being sent), it retries once with the same `run_id`: the kernel ignores a repeated invocation; if it is still in doubt, it answers `202` and lets the watchdog close the run if the kernel does not move it to `running`.
 - **Quotas and peaks**: AgentCore's new-session quota (25 per second) only counts new microVMs; with one per chat, subsequent messages in an active chat do not use quota. The Monday 8 a.m. task peak is spread out by the task queue consumer, which limits the starts per second of each `api` replica to leave room for chats (see "Scheduled tasks" in "Operations").
 
-### No duplicate runs
+### Run idempotency
 
 - **The `run_id`**: `{oid}.{suffix}`. The `oid` goes in hexadecimal without hyphens and in lowercase (32 characters), followed by a dot and a 26-character suffix in base32 and in uppercase. In a chat the suffix is a ULID generated by the app; in a task, the first 26 characters in RFC 4648 base32 of SHA-256(task | scheduled time), which never carry the `=` padding, so that a repeated delivery gives the same id. That is 59 characters, within the 64 of an STS session name, which is why the `run_id` can also be the session name of its credentials.
 - **App → backend**: the `run_id` is generated by the app (`{oid}.{ULID}`, one per message) and is the key of `RUN#`; `api` checks that it starts with the JWT's `oid` and that the suffix is a ULID, and if not, answers 400: nobody can charge their spending to another user by choosing the `run_id`; `api` writes it with `attribute_not_exists` in the same transaction that sets `active_run`. If the app retries, the transaction fails with "already exists" and `api` answers the same `202 {run_id}`; if it fails because of `active_run` and that run still has no `end`, it answers 409 (if it already has `end`, it closes it with `close(run_id)` and continues). No separate idempotency header or key.
@@ -1017,7 +1018,7 @@ On publishing, the panel validates the same as in "Agent versions": that `pdf-re
 - **Its context, like the main agent's**: since its conversation accumulates between calls, the kernel gives it the same `ContextManager` as the main agent (with the summary on the subagent's model and its window from the catalogue) and the same `S3Storage` (`storage=`). Its stash lives in `conversation/context/{chat}/scopes/agent/{subagent}/`, separate from the main agent's, and after building the `Agent` on another microVM it recovers what was trimmed with `retrieve_context` (checked by running: `pruebas/kernel/t_subagente_stash.py`). Without `storage=`, the stash lives in memory and goes inside its snapshot (85 KB with a result of 78,779 characters, versus 4.4 KB); without a context manager, Strands gives it the sliding window and the result goes in whole into the context and the snapshot (81 KB).
 - **In the app**: the subagent's events carry `subagent: <name>` and are rendered as a collapsed card inside the card of the tool that called it (its intermediate events do not go through the main agent's hooks: they reach its stream as `AgentAsToolStreamEvent`, and the kernel translates them into events with `subagent`). The consolidated message keeps only the summary. In a graph there is no tool calling them: each node is rendered as its own collapsed card, with its name and in the order it finishes (those running in parallel appear at the same time), and the final answer is the last node's text. For a debate, the user sees the two positions, the two replies and the arbiter's conclusion; none of this changes the SSE: they are the same events with the `subagent` field.
 
-### Models: one per agent
+### Models
 
 - **Catalogue in the panel**: the Bedrock models on offer, with their price per inference profile (used by the cost Lambda: the invocation log brings the profile, not the base model), their context window (the kernel passes it to Strands as `context_window_limit`), maximum parameters and whether it is active. Retiring a model prevents using it in new versions and the panel warns which agents use it.
 - **One per agent version**: the model and its parameters (temperature, maximum tokens, reasoning) are part of the versioned configuration; changing model means publishing a new version with its tests. The user does not choose a model: they choose an agent. To limit an expensive model, the agent that uses it is assigned only to the groups that should use it.
@@ -1046,7 +1047,7 @@ On publishing, the panel validates the same as in "Agent versions": that `pdf-re
 
 What each piece can reach and what it cannot.
 
-### Separate agents VPC
+### The agents VPC
 
 - **Only the kernel runtimes** (AgentCore Runtime in VPC mode: each microVM's network interfaces sit in its subnets).
 - **Code Interpreter, outside**: it goes in its own VPC (see "Data exfiltration over DNS"); the kernel reaches it through the AgentCore API, not over the network.
@@ -1550,7 +1551,7 @@ How: all our pieces carry OpenTelemetry, the open tracing standard, and send wha
 - **Propagation**: for the next piece to hang its spans from the same trace, the previous one passes it the `trace_id` and the parent span id. In an HTTP call it goes in a header; where there is no HTTP call (a queue, a DynamoDB item that triggers a Lambda) it has to go in the data itself. If a piece does not receive that context, it starts a new trace and the path is split in two.
 - **Export**: each piece gathers its finished spans and sends them in batches to the X-Ray OTLP endpoint (`xray.{region}.amazonaws.com/v1/traces`). X-Ray joins them by `trace_id`, even if they arrive from different pieces and at different times.
 
-### One trace per message
+### The trace of a message
 
 - **Trace = run**. A message from the app (or a scheduled task firing) creates a run, and that run is a trace. It fits how the platform works: `api` responds 202 right away and the work continues in the kernel, in the run events Lambda and in the push. If the trace were the HTTP request, it would end at the 202 and the important part would be left out. That is why everything that happens to the run, including what happens minutes later, hangs from the same trace.
 - **The `trace_id` is created by whoever creates the `run_id`**: the app in a chat, the `api` task consumer in a task, `admin` in a batch evaluation. That way the trace starts at the real origin of the message (the app also measures how long the network and the entry gateway take) and not at the first server.
@@ -1620,9 +1621,9 @@ Keeping everything is only reasonable if "everything" is the steps that matter a
 | Kernel | ADOT (`aws-opentelemetry-distro` ≥ 0.18, started with `opentelemetry-instrument`) and the Strands spans; runtime tracing enabled. The OpenTelemetry configuration is set by AgentCore in the container's environment (`OTEL_*`); among other things, it leaves the content of prompts and responses in the spans (`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`, `AWS_GENAI_CONTENT_EXTRACTION_OPT_OUT=true`) | Directly to the X-Ray OTLP endpoint, with the runtime's execution role, to the runtime's log group: spans in the `spans` stream and logs in `otel-rt-logs` (probe 14) |
 | Lambdas (Streams, cost, watchdog, chat expiry, chat deletion) | ADOT layer for Lambda | Directly to the X-Ray OTLP endpoint, with each Lambda's role |
 
-- **Why the app goes through `api`**: the X-Ray OTLP endpoint requires SigV4 (AWS credentials) or an API key, and neither can go inside an app that anyone can decompile. `POST /telemetry` is a normal API route: it accepts only with the user's JWT, checks that each span's `run_id` starts with their `oid` (they cannot write spans into someone else's trace), limits size and frequency, sets `enduser.id` = `oid` (overwriting whatever comes in) and forwards to its own task's collector.
-- **Why not CloudWatch RUM**: it is AWS's product for client telemetry, but its SDKs are for web and native iOS and Android, not for an Expo app in JavaScript.
-- **Why a collector in Fargate and not in the kernel or the Lambdas**: in Fargate the sidecar collector offloads the services (spans leave in the background) and it is where signing happens; the kernel and the Lambdas already bring their exporter (AgentCore and the ADOT layer) and sign with their own role.
+- **The app's spans go through `api`**: the X-Ray OTLP endpoint requires SigV4 (AWS credentials) or an API key, and neither can go inside an app that anyone can decompile. `POST /telemetry` is a normal API route: it accepts only with the user's JWT, checks that each span's `run_id` starts with their `oid` (they cannot write spans into someone else's trace), limits size and frequency, sets `enduser.id` = `oid` (overwriting whatever comes in) and forwards to its own task's collector.
+- **CloudWatch RUM does not apply**: it is AWS's product for client telemetry, but its SDKs are for web and native iOS and Android, not for an Expo app in JavaScript.
+- **The collector is only in Fargate**: in Fargate the sidecar collector offloads the services (spans leave in the background) and it is where signing happens; the kernel and the Lambdas already bring their exporter (AgentCore and the ADOT layer) and sign with their own role.
 
 ### Configuration (CDK)
 
@@ -1676,11 +1677,11 @@ What remains to be checked end to end is in the "Traces, idempotency and startup
 
 ## Build and deployment
 
-### Two services: api and admin
+### The api and admin services
 
-- **Why two**: the API all users use and the one administrators use are two security surfaces, with different rates of change and scaling. A bug in a chats route must not be able to reach "publish a version", and `admin` is not on the API Gateway: it can only be reached through the web ALB, with the administrators group.
 - **`api`** (the backend): chats, runs (it creates them and launches them with `launch()`) and SSE, files, `/me`, the user's scheduled tasks, the OBO, the internal routes (`/internal/obo`, `/internal/push`, `/internal/launch` for `admin`'s evaluations) and push sending. It scales by open SSE connections. It is the only one that decrypts OBO and does OBO with Entra (`admin` only queries groups in Graph with a separate registration).
 - **`admin`**: agents and versions, skills, Knowledge Bases, models and prices, budgets and exceptions, users, evaluations and the audit for the panel. It barely scales; it is deployed with the panel. It is the only one that writes agents, skills, prices and limits and that launches `StartIngestionJob`.
+- **Why they are separate**: the API all users use and the one administrators use are two security surfaces, with different rates of change and scaling. A bug in a chats route must not be able to reach "publish a version", and `admin` is not on the API Gateway: it can only be reached through the web ALB, with the administrators group.
 - **What is not split**: the SSE stays in `api` (separating it adds a hop and another deployment for little gain); the internal routes live in `api` because they need the Entra secret. Launching the agent does belong to `api` (chats and tasks, with the same `launch()`), not to `admin`: the panel requests its test runs through `/internal/launch`.
 - **Inside `api`**, Fastify modules with clear boundaries, each with its routes, its domain and its permissions: `chats`, `runs` (with the SSE), `files`, `me`, `tasks`, `telemetry`, `internal` and `push`.
 
@@ -1690,7 +1691,7 @@ What remains to be checked end to end is in the "Traces, idempotency and startup
 - **Python**: the kernel (Strands on AgentCore Runtime), `CodeInterpreterSandbox` and the skill scripts. Strands Python is the most mature version (1.63 versus 1.23 in TypeScript); the TypeScript one is already stable (1.x) and AgentCore Evaluations supports it since 1.5.0, but it still lacks pieces such as checkpoints and some model providers.
 - **Contract between the two**: the platform and the kernel do not call each other directly; they talk through the `InvokeAgentRuntime` payload (built by `api`) and the events in DynamoDB. Both are defined once in JSON Schema and the TypeScript (app, panel, backend) and Python (kernel) types are generated, so that a change in an event does not break the other side without warning.
 
-### Deployment: everything with CDK
+### Deployment with CDK
 
 - **A single infrastructure tool**: CDK in TypeScript, in the same repository as the backend, for both accounts (iDMZ and platform): networks and VPC endpoints, API Gateway and authorizer, ALB, ECS Fargate, DynamoDB, S3, KMS, SQS, EventBridge Scheduler, Lambdas, Knowledge Bases, AgentCore (Runtime, Code Interpreter, Evaluations), the MCP Hub and the MCPs, and the alarms.
 - **Images**: the pipeline builds and publishes to ECR the kernel image and those of `api`, `admin`, the panel, the web app (in production), the MCP Hub and each MCP; CDK deploys the new tag.
@@ -1702,10 +1703,10 @@ What remains to be checked end to end is in the "Traces, idempotency and startup
 - **Registration in the hub** in the same definition: tools it exposes, readable label, how to summarise the result, `confirm` and owner. The catalogue is monorepo code (`packages/config`), imported by the hub and `admin`; no CDK custom resource or table: adding a tool is already a pull request and a deployment, and the panel offers that catalogue when composing each agent's `allow` list.
 - **Adding a tool** = a code change reviewed in a pull request and deployed by the pipeline.
 
-### One monorepo
+### The monorepo
 
-- **Why**: there is genuinely shared code and it crosses languages. The contract (API, SSE events and `InvokeAgentRuntime` payload) generates the TypeScript and Python types; launching the agent is done only by `api`; `deleteChat` is called by `api` and the chat expiry Lambda; the limits, prices and access logic is used by the backend, the MCP Hub and the cost Lambda; `close(run_id)` is used by the run events Lambda, the watchdog and the backend; the API client, by the app and the panel. A change in an event touches both sides in the same pull request and, if it does not match, the build fails.
 - **Structure**: `apps/client` (the Expo app, iOS and web), `apps/panel` (Next.js with shadcn/ui), `apps/api` (the app's backend, Fastify, with modules `chats`, `runs` with the SSE, `files`, `me`, `tasks`, `telemetry`, `internal` and `push`), `apps/admin` (the panel's API); `lambdas/` (authorizer, run-events (close and approval notices), cost, watchdog, chat expiry, chat deletion, emergency); `packages/` (`contract`, `api-client`, `domain`, `config`); `mcp/` (the hub and our own MCP servers in TypeScript: `mcp/hub`, `mcp/time`, `mcp/documents`); `kernel/` (Python); `infra/` (CDK with the stacks).
+- **Shared code**, across languages: the contract (API, SSE events and `InvokeAgentRuntime` payload) generates the TypeScript and Python types; launching the agent is done only by `api`; `deleteChat` is called by `api` and the chat expiry Lambda; the limits, prices and access logic is used by the backend, the MCP Hub and the cost Lambda; `close(run_id)` is used by the run events Lambda, the watchdog and the backend; the API client, by the app and the panel. A change in an event touches both sides in the same pull request and, if it does not match, the build fails.
 - **Tools**: pnpm workspaces and Turborepo for TypeScript (only what changes is built and tested); uv for the kernel. The Expo app lives in the monorepo with its Metro configuration for internal packages and its releases with EAS; Next.js with `transpilePackages`.
 - **CDK in the same repository**: it builds the Lambdas and the container images directly, without publishing packages between repositories.
 - **Outside the monorepo**: the content of the skills (instructions and scripts), which is uploaded and versioned from the panel.

@@ -1,5 +1,5 @@
 // Recorre la app web (exportada en dist-web y servida por servidor.mjs) con Chrome y comprueba, con lo que la
-// app manda a /resultado y lo que apunta el servidor, cada caso del punto "App con assistant-ui".
+// app manda a /resultado y lo que apunta el servidor, cada caso del punto "App with assistant-ui".
 //
 //   CORTE_MS=1500 APROBACION_MS=6000 REGISTRO=registro.jsonl ESTATICO=dist-web node servidor.mjs &
 //   REGISTRO=registro.jsonl node prueba.mjs

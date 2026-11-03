@@ -1,4 +1,4 @@
-"""Sonda 17: el JWT de Entra verificado otra vez en `api` (fila "JWT en `api`" de "Por verificar").
+"""Sonda 17: el JWT de Entra verificado otra vez en `api` (fila "JWT in `api`" de "To verify").
 
 Qué comprueba, sin AWS ni Entra (claves RSA propias y un JWKS servido en local, con la forma de los de Entra):
 

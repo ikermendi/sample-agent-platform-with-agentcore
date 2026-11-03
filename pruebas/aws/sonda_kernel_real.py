@@ -1,7 +1,7 @@
 """Sonda 10 del nivel 2: el kernel lo más parecido al real, en Runtime V2 en la VPC sin salida.
 
-Resuelve contra AWS dos filas de "Por verificar": "Runtime V2 (instantánea)" con la imagen completa y la parte
-de límites y red de "Ejecución de código local".
+Resuelve contra AWS dos filas de "To verify": "Runtime V2 (snapshot)" con la imagen completa y la parte
+de límites y red de "Local code execution".
 
 Imagen (arm64): Python 3.12, `tini` como PID 1 (con -s, por si no lo fuera), el kernel en /opt/kernel (Strands
 1.63.0, SDK de AgentCore 1.25.2, boto3; directorio 0700, el usuario del Sandbox no puede usar ese Python) y el

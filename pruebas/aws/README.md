@@ -1,11 +1,11 @@
 # Sondas en AWS (nivel 2)
 
-Comprueban en una cuenta de pruebas lo que en `docs/arquitectura-agentes.md` sigue en "Por verificar antes de construir". Cada sonda es independiente: crea lo mínimo, mide, y lo borra al acabar aunque falle. Todo lo que crean lleva el prefijo `sonda-n2-` y la etiqueta `sonda=nivel2`, para encontrar restos si algo se interrumpe.
+Comprueban en una cuenta de pruebas lo que en `docs/arquitectura-agentes.md` sigue en "To verify before building". Cada sonda es independiente: crea lo mínimo, mide, y lo borra al acabar aunque falle. Todo lo que crean lleva el prefijo `sonda-n2-` y la etiqueta `sonda=nivel2`, para encontrar restos si algo se interrumpe.
 
 ## Antes de empezar
 
 - Credenciales de la cuenta de pruebas en el entorno (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` y, si son temporales, `AWS_SESSION_TOKEN`) o en un perfil (`AWS_PROFILE`), con permisos amplios en esa cuenta: las sondas crean roles de IAM, VPC, instancias EC2, balanceadores, PrivateLink, API Gateway, AgentCore, ECR, Route 53 Resolver DNS Firewall, KMS y Scheduler.
-- Región: `us-east-1` por defecto; se cambia con `SONDA_REGION`. Si la organización restringe regiones con una SCP (en `us-east-1` deja los servicios globales y pocos regionales, y deniega DynamoDB y casi todo S3: ver "Región de las cuentas de pruebas" en el anexo de `docs/arquitectura-agentes.md`), usa la región donde se permite todo, p. ej. `SONDA_REGION=eu-north-1`.
+- Región: `us-east-1` por defecto; se cambia con `SONDA_REGION`. Si la organización restringe regiones con una SCP (en `us-east-1` deja los servicios globales y pocos regionales, y deniega DynamoDB y casi todo S3: ver "Region of the test accounts" en el anexo de `docs/arquitectura-agentes.md`), usa la región donde se permite todo, p. ej. `SONDA_REGION=eu-north-1`.
 - Para la sonda de Bedrock, acceso habilitado en la cuenta al Claude más barato del catálogo (Haiku), por su perfil de la región (`us.` o `eu.`), y cuota de tokens por minuto mayor que 0. No hace falta ningún modelo de OpenAI: `bedrock-mantle` está fuera del diseño por ahora.
 - Las sondas de AgentCore (5 y 6) necesitan boto3 >= 1.43 (la primera con `platformVersion`), que ya no admite Python 3.9: usan su propio entorno con Python 3.12. La 6 necesita además Docker (arm64).
 - Ninguna usa CDK: son scripts con boto3, para no depender de `cdk bootstrap`.
@@ -29,7 +29,7 @@ SONDA_REGIONES=eu-north-1,us-east-1 .venv312/bin/python limpiar_cuenta.py --borr
 
 ## Sondas, en orden
 
-| # | Sonda | Qué resuelve de "Por verificar" | Coste aproximado | Estado |
+| # | Sonda | Qué resuelve de "To verify" | Coste aproximado | Estado |
 |---|---|---|---|---|
 | 1 | `sonda_iam_datos.py` | Ejecución de código local (la parte de IAM): etiquetas de sesión y `${aws:PrincipalTag/...}`, `LeadingKeys` en transacciones, S3 por prefijo y `ListBucket`, `If-Match` con dos escritores, `SessionTokenUtilization` | Céntimos, minutos | Hecha (1-11-2026, eu-north-1): 15 de 15; `SessionTokenUtilization` no vino en la respuesta |
 | 2 | `sonda_scheduler_fifo.py` | Tareas programadas: Scheduler hacia la cola FIFO cifrada con KMS, permisos del rol del horario, `run_id` por disparo con `<aws.scheduler.execution-id>`, cola de fallidos | Céntimos (la clave de KMS queda con borrado programado a 7 días) | Hecha (1-11-2026, eu-north-1): 7 de 7 |

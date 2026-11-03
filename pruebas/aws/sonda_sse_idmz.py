@@ -1,7 +1,7 @@
 """Sonda 4 del nivel 2: SSE por API Gateway REST con streaming, VPC Link y NLB.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre la entrada por la iDMZ
-(secciones "Entrada por la iDMZ" y "Streaming de API Gateway REST" en Verificado):
+(secciones "Entry through the iDMZ" y "API Gateway REST streaming" en "Verified"):
 
   1. Una integración HTTP_PROXY por VPC Link con responseTransferMode=STREAM entrega los eventos
      según llegan (no espera al final de la respuesta).

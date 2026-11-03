@@ -1,4 +1,4 @@
-"""Sonda 13 del nivel 2: el MCP Hub (fila "MCP Hub" de Por verificar), de punta a punta en AWS.
+"""Sonda 13 del nivel 2: el MCP Hub (fila "MCP Hub" de "To verify"), de punta a punta en AWS.
 
 Montaje:
   - VPC de integraciones (sin NAT ni puerta de enlace; endpoints de ECR, Logs, KMS, ECS y gateways de S3 y

@@ -1,6 +1,6 @@
 # Prueba de la app con assistant-ui (Expo)
 
-Comprueba el punto "App con assistant-ui" de "Por verificar" del documento de arquitectura (`docs/arquitectura-agentes.md`): la lista de chats con `useRemoteThreadListRuntime` y un `useExternalStoreRuntime` por chat, con los mensajes, el SSE y la cola en un store propio, contra un backend simulado.
+Comprueba el punto "App with assistant-ui" de "To verify" del documento de arquitectura (`docs/arquitectura-agentes.md`): la lista de chats con `useRemoteThreadListRuntime` y un `useExternalStoreRuntime` por chat, con los mensajes, el SSE y la cola en un store propio, contra un backend simulado.
 
 - `chats.ts`: el store de cada chat, fuera de React: historial (primero lo de la caché y después lo nuevo con `after=<seq>`), ejecución (`POST /chats/{id}/runs`), SSE con reconexión, eventos del kernel convertidos en partes de assistant-ui, aprobaciones y la cola (`createMessageQueue`, guardada en el dispositivo).
 - `cache.ios.ts`: la caché de iOS, SQLite (`expo-sqlite`) en `Library/Caches`: la lista de chats, los mensajes de los chats abiertos en los últimos 30 días y la cola; `sincronizar` aplica la lista entera del backend y quita lo que ya no viene. `cache.ts` es la versión vacía de la web (todo en memoria; la cola, en `localStorage`).

@@ -1,6 +1,6 @@
 # Prueba de trazas de la app (Expo)
 
-Comprueba lo que la sección "Trazas de punta a punta" del documento de arquitectura (`docs/arquitectura-agentes.md`) dice de la app: OpenTelemetry sin instrumentación automática, ids en formato X-Ray, `traceparent` en cada petición y un exportador propio que manda OTLP JSON con `fetch` a `POST /telemetry`.
+Comprueba lo que la sección "End-to-end tracing" del documento de arquitectura (`docs/arquitectura-agentes.md`) dice de la app: OpenTelemetry sin instrumentación automática, ids en formato X-Ray, `traceparent` en cada petición y un exportador propio que manda OTLP JSON con `fetch` a `POST /telemetry`.
 
 - `telemetria.ts`: el módulo de trazas tal como lo tendría la app.
 - `App.tsx`: abre un tramo "enviar mensaje", hace una petición hija a `/eco` y exporta los tramos; el resultado sale en pantalla y en `POST /resultado`.

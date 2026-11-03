@@ -1,7 +1,7 @@
 """Sonda 14 del nivel 2: trazas de punta a punta con OpenTelemetry y X-Ray (Transaction Search).
 
-Comprueba contra AWS lo que la sección "Trazas de punta a punta" del documento de arquitectura deja en
-"Por verificar":
+Comprueba contra AWS lo que la sección "End-to-end tracing" del documento de arquitectura deja en
+"To verify":
 
   A. API Gateway REST (HTTP_PROXY por VPC Link, streaming, trazado activo en la etapa) delante de un
      servidor que devuelve las cabeceras que recibe: ¿llega `traceparent` tal cual?, ¿continúa la traza

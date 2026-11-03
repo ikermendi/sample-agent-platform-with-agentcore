@@ -1,6 +1,6 @@
 """Sonda 9 del nivel 2: una microVM por chat (Runtime V2, varias invocaciones a la misma sesión).
 
-Comprueba la fila "Una microVM por chat" de "Por verificar" (y lo que dan por hecho "Runtime V2 y lo que
+Comprueba la fila "One microVM per chat" de "To verify" (y lo que dan por hecho "Runtime V2 y lo que
 exige al kernel" y la Lambda vigilante):
 
   1. Dos invocaciones a la vez a la misma sesión: con una ejecución en segundo plano (HealthyBusy), con

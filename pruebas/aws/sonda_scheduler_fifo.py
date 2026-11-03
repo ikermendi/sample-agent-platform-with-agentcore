@@ -1,7 +1,7 @@
 """Sonda 2 del nivel 2: EventBridge Scheduler hacia la cola SQS FIFO cifrada con KMS.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre el disparo de las
-tareas programadas (sección "Tareas programadas" de Operación):
+tareas programadas (sección "Scheduled tasks" de "Operations"):
 
   1. Un horario `at(...)` con zona horaria entrega en la cola FIFO cifrada con una clave de KMS propia,
      con el rol de ejecución (sqs:SendMessage + kms:GenerateDataKey y kms:Decrypt) y la política de

@@ -1,7 +1,7 @@
 """Sonda 3 del nivel 2: inferencia directa a Claude por perfil, con las credenciales de la sesión.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre la llamada al modelo
-(filas "Inferencia directa" y "Claude por perfil de inferencia" de Por verificar, y "Credenciales del
+(filas "Inferencia directa" y "Claude por perfil de inferencia" de "To verify", y "Credenciales del
 kernel"). Las sesiones son como las del diseño: RoleSessionName = run_id (`{oid}.{ULID}`, ver
 runid_coste.py), SourceIdentity = oid y una política de sesión con los modelos de la versión (ARN del
 perfil + `foundation-model` en cada región de destino) y un `NotAction` que deja pasar lo demás.

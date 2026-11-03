@@ -1,8 +1,8 @@
 """Sonda 5 del nivel 2: AgentCore Runtime V2 en modo VPC sin salida, y Code Interpreter en su VPC sin DNS.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre el motor
-(secciones "Runtime V2 y lo que exige al kernel", "Code Interpreter" y "Runtime V2 (instantánea)"
-en Por verificar):
+(secciones "Runtime V2 and what it requires of the kernel", "Code Interpreter" y "Runtime V2 (snapshot)"
+en "To verify"):
 
 Runtime (un kernel de unas veinte líneas, solo con la librería estándar, en zip desde S3):
   1. Un runtime con platformVersion=V2 en una VPC sin NAT ni puerta de enlace (solo el gateway de S3)

@@ -1,6 +1,6 @@
 # Pruebas del kernel sin AWS
 
-Comprueban, ejecutando Strands de verdad, lo que el documento de arquitectura (`docs/arquitectura-agentes.md`, sección "Verificado antes de construir") afirma sobre su comportamiento. No llaman a Bedrock ni a ningún servicio de AWS: usan un modelo falso (`fake.py`) que devuelve respuestas preparadas y apunta lo que recibe, y servidores MCP mínimos y locales (`mcp_eco.py` por stdio; `mcp_cabeceras.py` por Streamable HTTP, que apunta la cabecera `Authorization` y la sesión de cada petición).
+Comprueban, ejecutando Strands de verdad, lo que el documento de arquitectura (`docs/arquitectura-agentes.md`, sección "Verified before building") afirma sobre su comportamiento. No llaman a Bedrock ni a ningún servicio de AWS: usan un modelo falso (`fake.py`) que devuelve respuestas preparadas y apunta lo que recibe, y servidores MCP mínimos y locales (`mcp_eco.py` por stdio; `mcp_cabeceras.py` por Streamable HTTP, que apunta la cabecera `Authorization` y la sesión de cada petición).
 
 Están fijadas a las versiones que se han leído (Strands 1.63.0, SDK de AgentCore 1.25.2). Al subir de versión, se repiten: si alguna falla, el documento ha dejado de ser cierto.
 

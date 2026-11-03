@@ -1,4 +1,4 @@
-"""Sonda 18: gestión del contexto con Claude de verdad (fila "Gestión del contexto" de "Por verificar").
+"""Sonda 18: gestión del contexto con Claude de verdad (fila "Context management with Claude" de "To verify").
 
 Qué comprueba:
 

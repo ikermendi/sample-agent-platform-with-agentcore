@@ -1,6 +1,6 @@
 """Sonda 11 del nivel 2: el kernel con Code Interpreter de punta a punta, y ficheros grandes.
 
-Resuelve la fila "Code Interpreter" de "Por verificar" en docs/arquitectura-agentes.md
+Resuelve la fila "Code Interpreter" de "To verify" en docs/arquitectura-agentes.md
 ("Ficheros del chat (kernel y Code Interpreter)" y "Ejecución de código del modelo"):
 
   1. Un `CodeInterpreterSandbox` propio (un `Sandbox` de Strands 1.63 sobre el cliente `CodeInterpreter`

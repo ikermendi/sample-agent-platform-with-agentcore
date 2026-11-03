@@ -1,7 +1,7 @@
 """Sonda 6 del nivel 2: Runtime V2 con una imagen real desde ECR, en una VPC sin NAT y con DNS Firewall.
 
-Completa la sonda 5 en lo que necesita una imagen de contenedor (sección "Runtime V2 (instantánea)"
-y la parte de DNS de "Ejecución de código local" en Por verificar):
+Completa la sonda 5 en lo que necesita una imagen de contenedor (sección "Runtime V2 (snapshot)"
+y la parte de DNS de "Local code execution" en "To verify"):
 
   1. La imagen (Python 3.12 + Strands + boto3, arm64) llega por los endpoints de ECR (api y dkr) y el
      gateway de S3 de la VPC, sin NAT, y con DNS Firewall bloqueando todo lo que no sea *.amazonaws.com.

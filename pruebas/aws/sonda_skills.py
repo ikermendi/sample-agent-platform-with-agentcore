@@ -1,4 +1,4 @@
-"""Sonda 16: herramientas de skills con Claude de verdad (fila "Herramientas de skills" de "Por verificar").
+"""Sonda 16: herramientas de skills con Claude de verdad (fila "Skill tools with Claude" de "To verify").
 
 Qué comprueba:
 

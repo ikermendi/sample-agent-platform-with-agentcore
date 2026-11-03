@@ -1,7 +1,7 @@
 """Sonda 12 del nivel 2: EventBridge Scheduler → cola SQS estándar cifrada → consumidor de tareas de `api`.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre el consumidor de la cola de
-tareas (sección "Tareas programadas" de Operación, "Lanzar" y "Sin ejecuciones duplicadas"):
+tareas (sección "Scheduled tasks" de "Operations", "Launch" y "No duplicate runs"):
 
   1. El cuerpo con <aws.scheduler.scheduled-time> trae la hora programada, no la de entrega; dos disparos
      de un rate(1 minute) dan run_id distintos. Intenta provocar reintentos de Scheduler con cinco fallos
@@ -18,7 +18,7 @@ tareas (sección "Tareas programadas" de Operación, "Lanzar" y "Sin ejecuciones
   5. Ráfaga: 50 horarios at() a la misma hora con 2 consumidores a 5 arranques/s; y 50 mensajes de golpe.
   6. Un mensaje que el consumidor siempre falla acaba en la DLQ tras 8 entregas.
 
-"Lanzar" es aquí escribir la ejecución (RUN#{run_id} + ejecucion_activa del chat, en una transacción) y
+"Launch" es aquí escribir la ejecución (RUN#{run_id} + ejecucion_activa del chat, en una transacción) y
 esperar unos segundos; no hace falta AgentCore. El consumidor es este mismo fichero con el subcomando
 `consumidor`, que la sonda arranca como subproceso (para poder mandarle SIGTERM).
 

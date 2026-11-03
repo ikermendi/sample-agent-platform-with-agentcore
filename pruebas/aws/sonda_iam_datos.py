@@ -1,7 +1,7 @@
 """Sonda 1 del nivel 2: IAM de la sesión, DynamoDB y S3, en una cuenta de pruebas.
 
 Comprueba contra AWS lo que el documento de arquitectura da por hecho sobre las credenciales
-de una ejecución (secciones "Credenciales del kernel" y "Cómo cabe en IAM"):
+de una ejecución (secciones "Kernel credentials" y "How it fits in IAM"):
 
   1. La lanzadora asume el rol de sesión con etiquetas (oid, chat, run_id…) y SourceIdentity;
      una etiqueta no permitida se rechaza.

@@ -153,7 +153,7 @@ The glossary and the decisions behind this design come next. The detailed diagra
 
 - One Expo app (iOS and web) with assistant-ui and a local chat cache on iOS only; a Next.js panel with shadcn/ui that is only an interface.
 - Entry through an iDMZ account (API Gateway REST with streaming and a Lambda authorizer that only validates the Entra JWT; `api` reads `oid` and groups from the token itself); Akamai only in front of the panel and the web app.
-- Everything in CDK, in a monorepo (TypeScript + Python) with a shared contract in JSON Schema.
+- Everything in CDK, in a new monorepo (TypeScript + Python) with a shared contract in JSON Schema; its structure is in "The monorepo".
 - Test environment in a single account, with the VPCs and scheduled shutdowns; what has been checked (in the code, locally and with the probes against AWS) is in [Verified](#verified) and what remains to be tested, in [To verify](#to-verify).
 
 ### Discarded alternatives
@@ -1854,11 +1854,93 @@ What remains to be checked end to end is in the "Traces, idempotency and startup
 
 ### The monorepo
 
-- **Structure**: `apps/client` (the Expo app, iOS and web), `apps/panel` (Next.js with shadcn/ui), `apps/api` (the app's backend, Fastify, with modules `chats`, `runs` with the SSE, `files`, `me`, `tasks`, `telemetry`, `internal` and `push`), `apps/admin` (the panel's API); `lambdas/` (authorizer, run-events (close, copies into `CTL#` and approval notices), cost, watchdog, chat expiry, chat deletion, emergency); `packages/` (`contract`, `api-client`, `domain`, `config`); `mcp/` (the hub and our own MCP servers in TypeScript: `mcp/hub`, `mcp/time`, `mcp/documents`); `kernel/` (Python); `infra/` (CDK with the stacks).
+The platform lives in a new repository, `agent-platform`, not in this one. Each folder at the top is a kind of deployment: what runs on Fargate behind a client, what reacts in a Lambda, what talks MCP, the agent and the infrastructure.
+
+```text
+agent-platform/
+├── apps/                          # what users reach; one image or client each
+│   ├── client/                    # Expo app, iOS and web: eas.json, metro.config.js, Dockerfile (nginx with the web export)
+│   ├── panel/                     # Next.js with shadcn/ui, only an interface
+│   ├── api/                       # the app's backend (Fastify)
+│   │   └── src/modules/           # chats, runs (launch() and the SSE), files, me, tasks, telemetry, internal, push
+│   └── admin/                     # the panel's API (Fastify)
+│       └── src/modules/           # agents, skills, knowledge-bases, models, budgets, users, evaluations, audit
+├── lambdas/                       # one folder per function, one trigger and one job each
+│   ├── authorizer/                # deployed in the iDMZ account in production
+│   ├── run-events/                # close, copies into CTL# and approval notices
+│   ├── cost/
+│   ├── watchdog/
+│   ├── chat-expiry/
+│   ├── chat-deletion/
+│   └── emergency/                 # test environment only
+├── mcp/
+│   ├── hub/                       # the single door: run token, allow, approvals, OBO, audit
+│   ├── time/
+│   └── documents/
+├── kernel/                        # the only Python piece
+│   ├── pyproject.toml             # uv, with Strands and the AgentCore SDK pinned to exact versions
+│   ├── package.json               # only so Turborepo sees it: test and build scripts that call uv and Docker
+│   ├── Dockerfile
+│   ├── assets/                    # templates, fonts and brand styles baked into the image
+│   ├── src/kernel/
+│   │   ├── main.py                # the Runtime's entry point
+│   │   ├── agent.py               # builds the Agent from the version in the payload
+│   │   ├── contract/              # types generated from packages/contract
+│   │   ├── events/                # event hooks, batched writes to DynamoDB, heartbeat and cancel
+│   │   ├── context/               # ContextManager, stash, measuring by parts
+│   │   ├── workspace/             # sync with S3
+│   │   ├── skills/                # activation and typed tools from tools.yaml
+│   │   ├── subagents/             # catalogue and as-tool wrappers
+│   │   ├── hub/                   # MCP client, run token, approval_id in _meta
+│   │   ├── sandbox/               # Sandbox for the model's code
+│   │   └── tools/                 # update_plan and the other kernel tools
+│   └── tests/
+├── packages/                      # all the code shared between deployments
+│   ├── contract/                  # the only definition of what crosses between pieces
+│   │   ├── schema/                # JSON Schema: api, events (DynamoDB and SSE), payload, run-token, tools (tools.yaml)
+│   │   └── src/generated/         # TypeScript types
+│   ├── api-client/                # typed client, for the app and the panel
+│   ├── domain/                    # close(run_id), deleteChat, limits, prices, access; no HTTP framework
+│   ├── config/                    # catalogue of hub tools
+│   └── telemetry/                 # OpenTelemetry setup for the Node services
+├── infra/                         # CDK
+│   ├── bin/app.ts
+│   ├── config/                    # one file per environment: test.ts (shutdowns included), production.ts
+│   ├── lib/stacks/                # network, ephemeral-network, data, agentcore, idmz, services, integrations, shutdowns
+│   ├── lib/constructs/            # fargate-service, lambda-function, mcp-server
+│   └── test/
+├── docs/                          # this document and its diagram
+├── .github/                       # workflows (pull request, deployment) and CODEOWNERS
+├── package.json                   # root scripts: build, test, lint, contract:generate
+├── pnpm-workspace.yaml
+├── turbo.json
+├── tsconfig.base.json
+└── eslint.config.mjs
+```
+
+- **Inside each piece**: tests next to the code they test (`*.test.ts`), except in the kernel, whose Python layout has its own `tests/`. Each service or Lambda has its `package.json` and, if it is a service, its `Dockerfile`, which is built with the repository root as context to reach `packages/`. The kernel's is built from `kernel/` alone, without Node.
+- **What each piece can import**, and nothing else; pnpm only resolves what each `package.json` declares, so an undeclared import fails at build time:
+
+  | Piece | Can import |
+  |---|---|
+  | `apps/client` | `contract`, `api-client` |
+  | `apps/panel` | `contract`, `api-client`, `telemetry` |
+  | `apps/api` | `contract`, `domain`, `telemetry` |
+  | `apps/admin` | `contract`, `domain`, `config`, `telemetry` |
+  | `lambdas/*` | `contract`, `domain`; `authorizer` and `emergency`, nothing of ours |
+  | `mcp/hub` | `contract`, `domain`, `config`, `telemetry` |
+  | Our own MCPs | `contract`, `telemetry` |
+  | `kernel` | Only its generated types |
+  | `infra` | `config`, for the names of the MCPs; everything else by path, when building images and Lambdas |
+
+  Two things follow from the table. Nothing in `apps/`, `lambdas/` or `mcp/` imports a sibling: what two pieces need goes in `packages/`, or one calls the other over its internal route. And `domain` never reaches a client, because it holds the access and spending rules and the DynamoDB calls.
+- **Generated types, committed**: `pnpm contract:generate` writes `packages/contract/src/generated/` and `kernel/src/kernel/contract/`. They are in Git so the kernel's image needs no Node and a contract change can be read in the diff. The pull request workflow generates them again and fails if anything changes.
 - **Shared code**, across languages: the contract (API, SSE events and `InvokeAgentRuntime` payload) generates the TypeScript and Python types; launching the agent is done only by `api`; `deleteChat` is called by `api` and the chat expiry Lambda; the limits, prices and access logic is used by the backend, the MCP Hub and the cost Lambda; `close(run_id)` is used by the run events Lambda, the watchdog and the backend; the API client, by the app and the panel. A change in an event touches both sides in the same pull request and, if it does not match, the build fails.
-- **Tools**: pnpm workspaces and Turborepo for TypeScript (only what changes is built and tested); uv for the kernel. The Expo app lives in the monorepo with its Metro configuration for internal packages and its releases with EAS; Next.js with `transpilePackages`.
+- **Tools**: pnpm workspaces and Turborepo for TypeScript (only what changes is built and tested); uv for the kernel, which Turborepo sees through its small `package.json`, with a dependency on `contract`: a change in the contract also runs the kernel's tests. The Expo app lives in the monorepo with its Metro configuration for internal packages and its releases with EAS; Next.js with `transpilePackages`.
 - **CDK in the same repository**: it builds the Lambdas and the container images directly, without publishing packages between repositories.
-- **Outside the monorepo**: the content of the skills (instructions and scripts), which is uploaded and versioned from the panel.
+- **Adding an MCP**: a folder in `mcp/`, its tools in `packages/config` and its service in the `integrations` stack, in the same pull request.
+- **Outside the monorepo**: the content of the skills (instructions and scripts) and of the predefined subagents, which are uploaded and versioned from the panel.
+- **What comes from this repository**: this document with its diagram, and `esquema_tools.json`, which goes to `packages/contract/schema/tools/`. Nothing else: `pruebas/` has done its job and stays here, and the references to it in this document are the record of how each thing was checked, not files of the new repository. `pruebas/app/` and `pruebas/app-chat/` are a reference for `apps/client`. The rest (`backend/`, `frontend/`, `terraform/`, `runtimes/` and so on) also stays here: the new repository starts without its history.
 
 ### Zero-downtime deployment and rollback
 

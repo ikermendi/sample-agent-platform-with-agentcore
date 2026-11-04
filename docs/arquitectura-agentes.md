@@ -1965,7 +1965,7 @@ agent-platform/
 
 - **Versioned path**: `/v1/…` on the API Gateway. Compatible changes (new optional fields, new SSE events, new routes) do not change the version; an incompatible change opens `/v2`, which coexists with `/v1` for at least six months.
 - **SSE events**: the app ignores events and fields it does not know; the meaning or type of an existing one is never changed. The contract (JSON Schema in the monorepo) is the only definition, and the app, the panel, the backend and the kernel use the types generated from it.
-- **Clients**: the app sends `X-Client-Version`; if it is older than the minimum supported, the backend responds 426 and the app shows "update the application". JavaScript changes arrive through EAS Update without going through the App Store; native changes require a store release, and the minimum supported is raised when almost nobody uses the previous one any more. The web app is deployed on its own.
+- **Clients**: the app sends `X-Client-Version`; if it is older than the minimum supported, the backend responds 426 and the app shows "update the application". Every iOS change, JavaScript included, is a new build distributed through the Company Portal (Intune; no App Store and no EAS Update), and the minimum supported is raised when almost nobody uses the previous one any more. The web app is deployed on its own.
 - **Administration API** (`admin`): same rule, but the panel and `admin` are deployed together, so it can change without coexistence.
 
 <a id="test-environment"></a>

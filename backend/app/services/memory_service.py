@@ -147,6 +147,11 @@ class MemoryService:
                 sessionId=s["sessionId"],
                 maxResults=limit,
                 includePayloads=True,
+                # Exchanges only: the headless kernel also stores its SDK
+                # transcript in the session, tagged with a ``kind`` metadata key.
+                filter={"eventMetadata": [
+                    {"left": {"metadataKey": "kind"}, "operator": "NOT_EXISTS"}
+                ]},
             )
             for ev in resp.get("events", []):
                 texts = []
@@ -155,6 +160,10 @@ class MemoryService:
                     text = (conv.get("content") or {}).get("text", "")
                     if text:
                         texts.append(f"{conv.get('role', '?')}: {text[:200]}")
+                if not texts:
+                    # The kernel's SDK transcript events (blob payloads,
+                    # metadata kind=sdk-transcript) are not exchanges.
+                    continue
                 events.append(
                     {
                         "session_id": s["sessionId"],

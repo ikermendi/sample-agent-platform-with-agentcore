@@ -29,7 +29,7 @@ each optional and independent (see `invoke` in `src/main.py`):
 |---|---|
 | `mcp_servers` | Resolved registry entries → `ClaudeAgentOptions.mcp_servers` |
 | `skills` | Skill packages downloaded from S3 into the work dir |
-| `memory` | `{memory_id, actor_id, last_k_turns}` — retrieve before the run, `CreateEvent` after |
+| `memory` | `{memory_id, actor_id, last_k_turns}` — long-term records retrieved into the user turn; the SDK transcript (tool calls and results included) mirrored to the session's short-term events and resumed on the next invocation; the exchange stored as a conversational `CreateEvent` for long-term extraction. `last_k_turns` only applies to sessions with no stored transcript |
 | `model` | The resolved `(backend, model)` spec; wins over the container's `ANTHROPIC_MODEL` |
 | `llm_credentials` | The per-session gateway grant (gateway mode) |
 | `async` | `{bucket, key}` — run as an AgentCore async task, writing the answer + a status sidecar to S3 |

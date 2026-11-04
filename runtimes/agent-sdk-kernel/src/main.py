@@ -31,8 +31,9 @@ Payload contract::
         ],
         "memory": {                 // optional AgentCore Memory binding
             "memory_id": "mem-...", "actor_id": "alice",
-            "last_k_turns": 10      // replay the last K exchanges of this
-                                    // session on cold start (0 disables)
+            "last_k_turns": 10      // legacy sessions only (no stored
+                                    // transcript): replay the last K
+                                    // exchanges as text (0 disables)
         },
         "async": {                  // optional: run as an AgentCore async task
             "bucket": "…", "key": "feeds/example-digest/2026-07-23.md"
@@ -77,6 +78,7 @@ import os
 import random
 import re
 import time
+import uuid
 
 import boto3
 import llm_shim
@@ -88,6 +90,7 @@ from claude_agent_sdk import (
     TextBlock,
     query,
 )
+from memory_session_store import AgentCoreMemorySessionStore
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("agent-sdk-kernel")
@@ -521,6 +524,46 @@ def retrieve_memory_context(memory: dict, prompt: str) -> str:
         return ""
 
 
+def sdk_session_uuid(memory: dict, session_id: str) -> str:
+    """The SDK session id for one (memory, actor, AgentCore session).
+
+    The CLI only accepts UUIDs, and the same conversation must map to the
+    same id on every invocation — including after the microVM is recycled —
+    so it is derived, not stored."""
+    return str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"agentcore-memory:{memory.get('memory_id')}:{memory.get('actor_id')}:{session_id}",
+    ))
+
+
+async def bind_session_store(memory: dict, session_id: str) -> tuple[dict, bool]:
+    """Persist the SDK transcript (tool calls and results included) in
+    AgentCore Memory and resume it on the next invocation of this session.
+
+    Returns the ClaudeAgentOptions fields to apply and whether an earlier
+    transcript exists. Any Memory failure degrades to a fresh, unpersisted
+    session — the run itself never fails because of it.
+    """
+    memory_id, actor_id = memory.get("memory_id"), memory.get("actor_id")
+    if not memory_id or not actor_id or not session_id:
+        return {}, False
+    try:
+        client = boto3.client(
+            "bedrock-agentcore", region_name=os.environ.get("AWS_REGION", "us-east-1")
+        )
+        store = AgentCoreMemorySessionStore(client, memory_id, actor_id, session_id)
+        sdk_sid = sdk_session_uuid(memory, session_id)
+        exists = await store.has_transcript(sdk_sid)
+    except Exception:
+        logger.exception("session store unavailable (continuing without transcript)")
+        return {}, False
+    # First run of the session names the transcript; later runs resume it
+    # (the SDK loads it from the store into a temp config dir). Resuming a
+    # session id with no transcript would make the CLI fail, hence the probe.
+    fields = {"session_store": store, ("resume" if exists else "session_id"): sdk_sid}
+    return fields, exists
+
+
 DEFAULT_LAST_K_TURNS = 10
 # Budget caps: a long conversation must not crowd the actual prompt out of
 # the context window.
@@ -529,7 +572,11 @@ RECENT_TURNS_TOTAL_CHARS = 16000
 
 
 def retrieve_recent_turns(memory: dict, session_id: str) -> str:
-    """Replay the latest exchanges of *this* conversation (short-term memory).
+    """Replay the latest exchanges of *this* conversation as text.
+
+    Legacy fallback only: sessions with a stored SDK transcript (see
+    bind_session_store) resume the real conversation instead. This covers
+    sessions whose earlier turns predate the transcript store.
 
     A cold-started container has no process state, but every exchange was
     stored as one conversational event keyed by (actor, session) — and the
@@ -557,6 +604,10 @@ def retrieve_recent_turns(memory: dict, session_id: str) -> str:
             sessionId=session_id[:100],
             maxResults=min(k, 100),
             includePayloads=True,
+            # exchanges only, not the SDK transcript events of this session
+            filter={"eventMetadata": [
+                {"left": {"metadataKey": "kind"}, "operator": "NOT_EXISTS"}
+            ]},
         )
         events = [e for e in resp.get("events", []) if e.get("eventTimestamp")]
         # newest first, so the char budget preferentially keeps recent turns
@@ -768,21 +819,30 @@ async def invoke(payload: dict, context) -> dict:
     session_id = str(getattr(context, "session_id", "") or "")
 
     memory = (payload or {}).get("memory") or {}
+    # The system prompt stays identical across the turns of a session so the
+    # prompt cache holds; per-message context goes into the user turn.
     system_prompt = (payload or {}).get("system") or DEFAULT_SYSTEM_PROMPT
+    session_fields: dict = {}
+    context_blocks: list[str] = []
     if memory:
+        session_fields, has_transcript = await bind_session_store(memory, session_id)
         memory_context = retrieve_memory_context(memory, prompt)
         if memory_context:
-            system_prompt += (
-                "\n\nRelevant long-term memory about this user (from earlier "
-                "conversations — use it when helpful):\n" + memory_context
+            context_blocks.append(
+                "<user_memory>\nRelevant long-term memory about this user (from "
+                "earlier conversations — use it when helpful):\n"
+                + memory_context + "\n</user_memory>"
             )
-        recent = retrieve_recent_turns(memory, session_id)
-        if recent:
-            system_prompt += (
-                "\n\nRecent conversation in this session (replayed after a "
-                "restart — treat it as the dialogue so far and stay consistent "
-                "with it):\n" + recent
-            )
+        if not has_transcript:
+            recent = retrieve_recent_turns(memory, session_id)
+            if recent:
+                context_blocks.append(
+                    "<earlier_conversation>\nRecent conversation in this session "
+                    "(replayed after a restart — treat it as the dialogue so far "
+                    "and stay consistent with it):\n" + recent
+                    + "\n</earlier_conversation>"
+                )
+    agent_prompt = "\n\n".join(context_blocks + [prompt]) if context_blocks else prompt
 
     model_spec = (payload or {}).get("model") or {}
     model_env: dict[str, str] = {}
@@ -811,6 +871,7 @@ async def invoke(payload: dict, context) -> dict:
         allowed_tools=allowed,
         env=model_env,
         model=model_override,
+        **session_fields,
         **extra,
     )
 
@@ -830,7 +891,7 @@ async def invoke(payload: dict, context) -> dict:
         bucket, key = str(async_spec["bucket"]), str(async_spec["key"]).lstrip("/")
         task_id = app.add_async_task("agent-run", {"key": key})
         task = asyncio.get_running_loop().create_task(
-            run_async_task(prompt, options, bucket, key, task_id, otel)
+            run_async_task(agent_prompt, options, bucket, key, task_id, otel)
         )
         _ASYNC_TASKS.add(task)
         task.add_done_callback(_ASYNC_TASKS.discard)
@@ -843,7 +904,7 @@ async def invoke(payload: dict, context) -> dict:
                 "task_id": task_id, "output_key": key}
 
     try:
-        answer, usage, is_error = await run_agent(prompt, options, otel)
+        answer, usage, is_error = await run_agent(agent_prompt, options, otel)
     finally:
         llm_shim.release(grant_token)
     if memory and not is_error:

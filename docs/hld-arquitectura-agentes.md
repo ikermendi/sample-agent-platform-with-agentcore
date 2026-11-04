@@ -89,6 +89,7 @@ flowchart LR
 - A long-term memory per user that the user can see, edit and turn off.
 - Administrators version agents and skills, test and evaluate a version before publishing it, and roll back in one step.
 - Per-user monthly budgets with group defaults and exceptions, warnings at 80 % and a cut-off at 100 %.
+- Per-run limits for each agent: a long task stops and the user decides whether to continue.
 
 ### Non-functional
 
@@ -285,7 +286,7 @@ stateDiagram-v2
   [*] --> pending : api
   pending --> running : kernel accepts
   pending --> failed : could not launch · watchdog
-  running --> finished : ok · limit · timeout · approval_expired · error
+  running --> finished : ok · limit · run_limit · timeout · approval_expired · error
   running --> cancelled : user stops it
   running --> failed : no heartbeat (watchdog) · chat deleted
   finished --> [*]
@@ -414,6 +415,8 @@ flowchart LR
 ```
 
 Bedrock measures, `api` refuses new runs over the limit, and IAM cuts off runs in progress. The kernel only turns the deny into a clean `limit` ending. The accepted overrun is a few responses (about 10–20 s from crossing the limit to the deny taking effect).
+
+Per-run limits do a different job: they stop a long task from spending without the user deciding it. Each agent version sets a cap on turns and output tokens, which the kernel applies through Strands. On reaching one, the run ends with `run_limit` and the app offers **Continue**, as it does after `timeout`. Continue is an ordinary message: it goes through the budget check again, with new credentials, fresh counters and the same conversation. No run stays open while the user decides, so nothing is spent. These limits are soft and live in the kernel, so they are not a spending control: that remains the budget cut-off.
 
 ## 11. Quality attributes
 

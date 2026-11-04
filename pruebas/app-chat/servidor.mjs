@@ -8,7 +8,9 @@
 //
 // CORTE_MS corta cada conexión SSE a los N ms (como el tope de 15 minutos o una réplica que se drena);
 // APROBACION_MS es lo que se espera una aprobación antes de caducar. Qué hace una ejecución depende del texto
-// del mensaje: "aprobar" pide aprobación de `enviar_correo`; "largo", unos 9 s de texto; si no, unos 3 s.
+// del mensaje: "aprobar" pide aprobación de `enviar_correo`; "largo", unos 9 s de texto; "tope del run", "tiempo del
+// run" y "tope mensual" terminan con `limite_run`, `tiempo` y `limite` (el último deja el presupuesto agotado y
+// `POST /runs` da 402, igual que `POST /presupuesto`); si no, unos 3 s.
 //
 // SEMBRAR_CHATS=500 SEMBRAR_MENSAJES=500 arranca con 500 chats de 4 mensajes y el más reciente (`chat1`)
 // con 500, para la caché de iOS; `GET /chats/{id}/messages?after=<seq>` da solo los posteriores.
@@ -25,6 +27,7 @@ const espera = (ms) => new Promise((r) => setTimeout(r, ms));
 const chats = new Map(); // id -> { id, titulo, estado, actualizado, mensajes: [{ seq, rol, partes }], activa }
 const runs = new Map(); // run_id -> { chat, eventos: [{ id, evento, datos }], cancelar, aprobaciones: Map }
 let siguienteChat = 1;
+let agotado = false; // presupuesto del mes
 
 const SEMBRAR_CHATS = Number(process.env.SEMBRAR_CHATS ?? 0);
 const SEMBRAR_MENSAJES = Number(process.env.SEMBRAR_MENSAJES ?? 4);
@@ -103,11 +106,14 @@ async function ejecutar(runId, texto) {
   await espera(600);
   emite(run, "herramienta_fin", { id: herramienta.id, estado: "ok", resumen: "3 documentos" });
   partes.push({ tipo: "herramienta", ...herramienta, estado: "ok", resultado: "3 documentos" });
+  const parada = { "tope del run": "limite_run", "tiempo del run": "tiempo", "tope mensual": "limite" };
+  const motivo = Object.entries(parada).find(([k]) => texto.toLowerCase().includes(k))?.[1];
   const n = texto.toLowerCase().includes("largo") ? 30 : 8;
   const trozos = Array.from({ length: n }, (_, i) => `[${i + 1}] `);
   if (!(await texto_([`Respuesta a «${texto}»: `, ...trozos]))) return fin("cancelado");
   emite(run, "uso", { entrada: 1200, salida: 80 });
-  fin("ok");
+  if (motivo === "limite") agotado = true;
+  fin(motivo ?? "ok");
 }
 
 function sse(req, res, run, runId) {
@@ -158,7 +164,8 @@ createServer((req, res) => {
     if (req.url !== "/resultado" && !(p[0] === "runs" && p[2] === "events")) apunta({ metodo: req.method, ruta: req.url, cuerpo: json });
 
     if (req.url === "/resultado") { apunta({ resultado: json }); return responde(200, { ok: true }); }
-    if (req.url === "/reiniciar") { chats.clear(); runs.clear(); return responde(200, {}); }
+    if (req.url === "/reiniciar") { chats.clear(); runs.clear(); agotado = false; return responde(200, {}); }
+    if (req.url === "/presupuesto") { agotado = !!json.agotado; return responde(200, {}); }
     if (p[0] === "chats" && p.length === 1 && req.method === "GET")
       return responde(200, { chats: [...chats.values()].sort((a, b) => b.actualizado - a.actualizado).map(({ mensajes, ...c }) => c) });
     if (p[0] === "chats" && p.length === 1 && req.method === "POST") {
@@ -177,6 +184,7 @@ createServer((req, res) => {
     }
     if (chat && p[2] === "runs" && req.method === "POST") {
       if (chat.activa) return responde(409, { error: "ya hay una ejecución en marcha en este chat", activa: chat.activa });
+      if (agotado) return responde(402, { error: "presupuesto agotado" });
       const runId = json.run_id;
       chat.mensajes.push({ seq: chat.mensajes.length + 1, rol: "user", run_id: runId, partes: [{ tipo: "texto", texto: json.texto }] });
       chat.activa = runId;

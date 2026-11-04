@@ -43,7 +43,10 @@ const convertir = (m: any): Mensaje => ({
 type Parte = Exclude<ThreadMessageLike["content"], string>[number];
 type LlamadaHerramienta = Extract<Parte, { type: "tool-call" }>;
 type Mensaje = Omit<ThreadMessageLike, "content" | "status"> & { id: string; content: Parte[]; status?: ThreadMessageLike["status"] };
-type Estado = { mensajes: readonly ThreadMessageLike[]; ejecutando: boolean; contexto?: number; aviso?: string };
+type Estado = { mensajes: readonly ThreadMessageLike[]; ejecutando: boolean; contexto?: number; aviso?: string; continuar?: boolean; bloqueado?: boolean };
+
+// Lo que la app hace según cómo terminó la última ejecución: seguir con Continuar o bloquear la caja de texto.
+const trasFin = (motivo?: string) => ({ continuar: motivo === "limite_run" || motivo === "tiempo", bloqueado: motivo === "limite" });
 
 const textoDe = (m: AppendMessage) => m.content.map((p) => (p.type === "text" ? p.text : "")).join("");
 const mensajeDeCola = (texto: string): AppendMessage =>
@@ -129,7 +132,8 @@ export class Chat {
         this.mensajes.push({ id: `a_${r.activa}`, role: "assistant", status: { type: "running" }, content: [] });
         this.conectar(r.activa);
       }
-      this.cambia({ ejecutando: !!r.activa });
+      const ultimo = [...guardados.mensajes, ...r.mensajes].at(-1);
+      this.cambia({ ejecutando: !!r.activa, aviso: ultimo?.motivo, ...trasFin(r.activa ? undefined : ultimo?.motivo) });
     }
     const guardada = almacen.leer(remoteId);
     if (guardada) {
@@ -146,10 +150,10 @@ export class Chat {
     this.runId = runId;
     this.mensajes.push({ id: `u_${runId}`, role: "user", content: [{ type: "text", text: texto }] });
     this.mensajes.push({ id: `a_${runId}`, role: "assistant", status: { type: "running" }, content: [] });
-    this.cambia({ ejecutando: true, aviso: undefined });
+    this.cambia({ ejecutando: true, aviso: undefined, ...trasFin() });
     const r = await fetch(`${BASE}/chats/${remoteId}/runs`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ run_id: runId, texto }) });
     informa({ tipo: "post_run", chat: remoteId, run: runId, texto, estado: r.status });
-    if (r.status !== 202) return this.terminar(runId, { motivo: "error" });
+    if (r.status !== 202) return this.terminar(runId, { motivo: r.status === 402 ? "limite" : "error" });
     this.conectar(runId);
   }
 
@@ -244,7 +248,7 @@ export class Chat {
     for (const t of this.caducidades.values()) clearTimeout(t);
     this.caducidades.clear();
     if (this.runId === runId) this.runId = undefined;
-    this.cambia({ ejecutando: false, aviso: datos.motivo === "ok" ? undefined : datos.motivo });
+    this.cambia({ ejecutando: false, aviso: datos.motivo === "ok" ? undefined : datos.motivo, ...trasFin(datos.motivo) });
     informa({ tipo: "fin", chat: this.remoteId, run: runId, motivo: datos.motivo });
     this.cola.notifyIdle();
   }
@@ -262,6 +266,13 @@ export class Chat {
     const m = this.mensajes.find((x) => x.id === `a_${runId}`)!;
     m.content = m.content.map((p) => (p.type === "tool-call" && p.approval?.id === approvalId ? { ...p, approval: { ...p.approval, approved } } : p));
     this.cambia();
+  }
+
+  // El botón Continuar: un mensaje normal, con el presupuesto comprobado de nuevo por `POST /runs`
+  continuar() {
+    if (this.estado.ejecutando) return;
+    this.cola.notifyBusy();
+    return this.lanzar("Continúa");
   }
 
   // `onNew` solo llega sin cola; con cola, los envíos pasan por `createMessageQueue`

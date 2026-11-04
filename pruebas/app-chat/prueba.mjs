@@ -173,6 +173,68 @@ await id(`chat-${chatB}`).click();
   comprueba("6 tras recargar, la ejecución se retoma y la cola sale después", sse && sse.recibidos[0] === "1" && orden.length === 2 && orden.every((o) => o[1] === 202), { orden, eventos: sse?.recibidos.length });
 }
 
+// 7. Continuar: con `limite_run` y `tiempo` hay botón, con `limite` se bloquea la caja de texto
+const presupuesto = (agotado) => fetch(`${API}/presupuesto`, { method: "POST", body: JSON.stringify({ agotado }) });
+const finDe = async (texto) => {
+  const run = await ultimoRun(texto);
+  await hasta(() => fines(run).length, 15000);
+  await espera(300);
+  return fines(run)[0]?.motivo;
+};
+const ultimosPosts = (texto) => resultados().filter((r) => r.tipo === "post_run" && r.texto === texto);
+const abrirTrasRecargar = async (chat) => {
+  await pagina.reload();
+  await id("nuevo-chat").waitFor();
+  await espera(800);
+  await id(`chat-${chat}`).click();
+  await espera(800);
+};
+await nuevoChat();
+await enviar("tope del run");
+{
+  const motivo = await finDe("tope del run");
+  comprueba("7 limite_run: botón Continuar y caja de texto libre", motivo === "limite_run" && (await id("continuar").count()) === 1 && (await id("entrada").count()) === 1, { motivo });
+  await pagina.screenshot({ path: "captura-continuar.png" });
+  const chatC = await hasta(async () => (await id("chat-titulo").innerText()).match(/\((chat\d+)\)/)?.[1]);
+  await abrirTrasRecargar(chatC);
+  comprueba("7 el botón sigue al recargar y abrir el chat", (await id("continuar").count()) === 1);
+  await id("continuar").dblclick();
+  await hasta(() => ultimosPosts("Continúa").length);
+  const fin = await finDe("Continúa");
+  const posts = ultimosPosts("Continúa");
+  comprueba("7 Continuar lanza un solo run normal y el botón desaparece", fin === "ok" && posts.length === 1 && posts[0].estado === 202 && (await id("continuar").count()) === 0, { fin, posts: posts.length });
+  comprueba("7 el mensaje Continúa se ve en el chat", (await pagina.getByTestId("mensaje-user").last().innerText()).includes("Continúa"));
+
+  await enviar("tope del run con cola");
+  await ultimoRun("tope del run con cola");
+  await espera(500);
+  await enviar("sigo con la cola");
+  const finCola = await finDe("sigo con la cola");
+  comprueba("7 un mensaje en cola sale solo y no queda botón", finCola === "ok" && (await id("continuar").count()) === 0, { finCola });
+
+  await enviar("tiempo del run");
+  const tiempo = await finDe("tiempo del run");
+  const aviso = await id("aviso-continuar").innerText();
+  comprueba("7 tiempo: botón Continuar con su aviso", tiempo === "tiempo" && aviso.includes("tiempo máximo"), { tiempo, aviso });
+
+  await presupuesto(true);
+  await id("continuar").click();
+  await hasta(async () => ultimosPosts("Continúa").some((p) => p.estado === 402));
+  await espera(300);
+  comprueba("7 Continuar sin presupuesto: 402, sin botón y caja bloqueada", (await id("continuar").count()) === 0 && (await id("limite-mensual").count()) === 1 && (await id("entrada").count()) === 0);
+  await presupuesto(false);
+}
+await nuevoChat();
+await enviar("tope mensual");
+{
+  const motivo = await finDe("tope mensual");
+  const sinBoton = async () => (await id("continuar").count()) === 0 && (await id("limite-mensual").count()) === 1 && (await id("entrada").count()) === 0;
+  comprueba("7 limite: sin botón y caja bloqueada", motivo === "limite" && (await sinBoton()), { motivo });
+  const chatD = await hasta(async () => (await id("chat-titulo").innerText()).match(/\((chat\d+)\)/)?.[1]);
+  await abrirTrasRecargar(chatD);
+  comprueba("7 sigue bloqueada al recargar y abrir el chat", await sinBoton());
+}
+
 await pagina.screenshot({ path: "captura-web.png" });
 await navegador.close();
 const fallos = casos.filter((c) => !c.ok);

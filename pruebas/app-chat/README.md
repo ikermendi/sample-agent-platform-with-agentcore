@@ -7,7 +7,7 @@ Comprueba el punto "App with assistant-ui" de "To verify" del documento de arqui
 - `sse.ts`: el cliente SSE con el `fetch` global, un parser propio y `Last-Event-ID`.
 - `lista.ts`: el `RemoteThreadListAdapter` sobre `/chats`; `list()` pide la lista entera y la sincroniza con la caché.
 - `App.tsx`: las dos pantallas (lista y chat) con las primitivas de `@assistant-ui/react-native`; en una pantalla estrecha son dos pantallas, en una ancha van lado a lado.
-- `servidor.mjs`: el backend simulado (chats, ejecuciones con eventos guardados, SSE con cortes forzados, cancelar, aprobar); la ejecución depende del texto del mensaje ("aprobar", "largo"). Con `SEMBRAR_CHATS` y `SEMBRAR_MENSAJES` arranca con chats ya hechos.
+- `servidor.mjs`: el backend simulado (chats, ejecuciones con eventos guardados, SSE con cortes forzados, cancelar, aprobar); la ejecución depende del texto del mensaje ("aprobar", "largo", "tope del run", "tiempo del run", "tope mensual"). Con `SEMBRAR_CHATS` y `SEMBRAR_MENSAJES` arranca con chats ya hechos.
 - `prueba.mjs`: recorre la web con Chrome (Playwright) y comprueba cada caso con lo que la app manda a `/resultado` y lo que apunta el servidor.
 
 Versiones fijadas: Expo SDK 58 (React Native 0.88), `@assistant-ui/react-native` 0.1.51 (`core` 0.3.32), `assistant-stream` 0.3.55, `expo-sqlite` 58.0.15, `expo-file-system` 58.0.13, `playwright-core` 1.64.1 (usa el Chrome instalado).
@@ -28,7 +28,7 @@ LANG=en_US.UTF-8 npx expo run:ios --configuration Release --no-bundler
 sqlite3 "$(xcrun simctl get_app_container booted com.anonymous.app data)/Library/Caches/SQLite/cache.db" 'select count(*) from chats'
 ```
 
-Hecha en web (2-11-2026), 16 de 16:
+Hecha en web (4-11-2026), 25 de 25:
 
 - Reconexión: con el SSE cortado cada 1,5 s, 6 conexiones (5 con `Last-Event-ID`) y los 37 eventos de la ejecución en orden, sin huecos ni duplicados; el texto completo en pantalla.
 - Lista de chats: crear, elegir y el título que pone el backend (`generateTitle` espera a que exista).
@@ -36,6 +36,7 @@ Hecha en web (2-11-2026), 16 de 16:
 - Cambio de chat con una ejecución en marcha: al volver, la respuesta sigue escribiéndose y llega completa. assistant-ui no desmontó el hook del primer chat; el store aguantaría igual si lo hiciera.
 - Aprobaciones: `aprobacion_pendiente` como parte `approval`; aprobar y rechazar con `onRespondToToolApproval`; al caducar, la app pone `resolution: "expired"` con `caduca` (unos 150 ms antes de que llegue `fin` con `aprobacion_caducada`) y la tarjeta deja de ofrecer los botones.
 - Parar: `fin` con `cancelado`; el runtime llama a `notifyCancelled` antes de `onCancel` y lo encolado no sale hasta el siguiente envío, que lo reactiva.
+- Continuar: con `limite_run` y `tiempo` aparece el botón y sigue ahí al recargar y abrir el chat (el motivo va en el mensaje consolidado); una doble pulsación lanza un solo run con un mensaje "Continúa" normal, y un mensaje en cola sale solo sin dejar botón. Con `limite`, y con un 402 al pulsar Continuar, no hay botón y la caja de texto se bloquea. En iOS no está probado.
 - Recargar la app con una ejecución en marcha y dos mensajes en cola: al abrir el chat, la ejecución se retoma desde el primer evento (el backend dice cuál está activa) y la cola guardada se vuelve a encolar y sale después.
 
 En iOS (2-11-2026, simulador del iPhone 17 con iOS 27.2 y Xcode 27.2, `npx expo run:ios` con el backend en `localhost:8799`), a mano con el panel del simulador y el registro del servidor (`registro-ios.jsonl`):

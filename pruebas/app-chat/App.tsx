@@ -19,7 +19,7 @@ import {
   type ThreadMessageLike,
   type ToolCallMessagePartProps,
 } from "@assistant-ui/react-native";
-import { informa, obtenerChat } from "./chats";
+import { informa, obtenerChat, type Chat } from "./chats";
 import { listaDeChats } from "./lista";
 
 let montajes = 0;
@@ -106,14 +106,31 @@ function Cola() {
   );
 }
 
+function Continuar({ chat }: { chat: Chat }) {
+  const estado = useSyncExternalStore(chat.suscribir, chat.leer);
+  if (!estado.continuar) return null;
+  return (
+    <View testID="aviso-continuar" style={{ flexDirection: "row", alignItems: "center", padding: 8 }}>
+      <Text style={{ flex: 1, color: "#555" }}>
+        {estado.aviso === "tiempo" ? "El agente ha llegado al tiempo máximo." : "El agente ha parado aquí para no seguir gastando."}
+      </Text>
+      <Pressable testID="continuar" style={boton} onPress={() => chat.continuar()}><Text>Continuar</Text></Pressable>
+    </View>
+  );
+}
+
 function PantallaChat() {
+  const id = useAuiState((s) => s.threadListItem.id);
   const remoteId = useAuiState((s) => s.threadListItem.remoteId);
   const titulo = useAuiState((s) => s.threadListItem.title);
+  const chat = obtenerChat(id, remoteId);
+  const bloqueado = useSyncExternalStore(chat.suscribir, chat.leer).bloqueado;
   return (
     <ThreadPrimitive.Root style={{ flex: 1 }}>
       <Text testID="chat-titulo" style={{ fontWeight: "700", padding: 8 }}>{titulo ?? "Nuevo chat"} {remoteId ? `(${remoteId})` : ""}</Text>
       <ThreadPrimitive.MessagesFlatList style={{ flex: 1, paddingHorizontal: 8 }}>{() => <Mensaje />}</ThreadPrimitive.MessagesFlatList>
-      <ComposerPrimitive.Root style={{ padding: 8, borderTopWidth: 1, borderColor: "#ddd" }}>
+      <Continuar chat={chat} />
+      {bloqueado ? <Text testID="limite-mensual" style={{ padding: 8, borderTopWidth: 1, borderColor: "#ddd" }}>Has llegado a tu límite mensual; se renueva el día 1.</Text> : <ComposerPrimitive.Root style={{ padding: 8, borderTopWidth: 1, borderColor: "#ddd" }}>
         <Cola />
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <ComposerPrimitive.Input testID="entrada" placeholder="Escribe un mensaje" autoCorrect={false} autoCapitalize="none" style={{ flex: 1, borderWidth: 1, borderColor: "#ccc", borderRadius: 6, padding: 8 }} />
@@ -122,7 +139,7 @@ function PantallaChat() {
             <ComposerPrimitive.Cancel testID="parar" style={boton}><Text>Parar</Text></ComposerPrimitive.Cancel>
           </ThreadPrimitive.If>
         </View>
-      </ComposerPrimitive.Root>
+      </ComposerPrimitive.Root>}
     </ThreadPrimitive.Root>
   );
 }

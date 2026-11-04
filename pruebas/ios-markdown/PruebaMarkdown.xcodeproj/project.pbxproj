@@ -1,0 +1,55 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+		A0000000000000000000000A /* App */ = {isa = PBXBuildFile; productRef = A0000000000000000000000F /* MarkdownUI */; };
+		A0000000000000000000000B /* App */ = {isa = PBXBuildFile; productRef = A00000000000000000000010 /* Textual */; };
+		A00000000000000000000001 = {isa = PBXGroup; children = (A00000000000000000000002, A00000000000000000000003); sourceTree = "<group>"; };
+		A00000000000000000000002 /* PruebaMarkdown */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (A00000000000000000000012); path = PruebaMarkdown; sourceTree = "<group>"; };
+		A00000000000000000000012 = {isa = PBXFileSystemSynchronizedBuildFileExceptionSet; membershipExceptions = (Info.plist); target = A00000000000000000000005; };
+		A00000000000000000000003 /* Products */ = {isa = PBXGroup; children = (A00000000000000000000004); name = Products; sourceTree = "<group>"; };
+		A00000000000000000000004 /* PruebaMarkdown.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PruebaMarkdown.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000005 /* PruebaMarkdown */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000009;
+			buildPhases = (A00000000000000000000006, A00000000000000000000007);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (A00000000000000000000002);
+			name = PruebaMarkdown;
+			packageProductDependencies = (A0000000000000000000000F, A00000000000000000000010);
+			productName = PruebaMarkdown;
+			productReference = A00000000000000000000004;
+			productType = "com.apple.product-type.application";
+		};
+		A00000000000000000000006 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000007 = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A0000000000000000000000A, A0000000000000000000000B); runOnlyForDeploymentPostprocessing = 0; };
+		A00000000000000000000008 /* Project */ = {
+			isa = PBXProject;
+			buildConfigurationList = A0000000000000000000000C;
+			compatibilityVersion = "Xcode 16.0";
+			developmentRegion = es;
+			hasScannedForEncodings = 0;
+			knownRegions = (es, Base);
+			mainGroup = A00000000000000000000001;
+			packageReferences = (A0000000000000000000000D, A0000000000000000000000E);
+			productRefGroup = A00000000000000000000003;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (A00000000000000000000005);
+		};
+		A00000000000000000000009 = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000013, A00000000000000000000014); defaultConfigurationName = Release; };
+		A0000000000000000000000C = {isa = XCConfigurationList; buildConfigurations = (A00000000000000000000015, A00000000000000000000016); defaultConfigurationName = Release; };
+		A00000000000000000000013 = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PruebaMarkdown/Info.plist; LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = com.prueba.markdown; PRODUCT_NAME = PruebaMarkdown; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+		A00000000000000000000014 = {isa = XCBuildConfiguration; buildSettings = {GENERATE_INFOPLIST_FILE = NO; INFOPLIST_FILE = PruebaMarkdown/Info.plist; LD_RUNPATH_SEARCH_PATHS = "@executable_path/Frameworks"; PRODUCT_BUNDLE_IDENTIFIER = com.prueba.markdown; PRODUCT_NAME = PruebaMarkdown; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		A00000000000000000000015 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; ONLY_ACTIVE_ARCH = YES; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		A00000000000000000000016 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; IPHONEOS_DEPLOYMENT_TARGET = 18.0; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
+		A0000000000000000000000D = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/gonzalezreal/swift-markdown-ui"; requirement = {kind = exactVersion; version = 2.4.1; }; };
+		A0000000000000000000000E = {isa = XCRemoteSwiftPackageReference; repositoryURL = "https://github.com/gonzalezreal/textual"; requirement = {kind = exactVersion; version = 0.5.0; }; };
+		A0000000000000000000000F /* MarkdownUI */ = {isa = XCSwiftPackageProductDependency; package = A0000000000000000000000D; productName = MarkdownUI; };
+		A00000000000000000000010 /* Textual */ = {isa = XCSwiftPackageProductDependency; package = A0000000000000000000000E; productName = Textual; };
+	};
+	rootObject = A00000000000000000000008;
+}

@@ -1,6 +1,6 @@
 # Agent platform: high-level design
 
-*HLD · Expo (iOS and web) + REST · AWS us-east-1*
+*HLD · SwiftUI (iOS) and SPA (web) + REST · AWS us-east-1*
 
 This document describes the architecture of the agent platform: its context, the components and their responsibilities, the main flows, the data, the network and security model, and the decisions and risks behind them. How each piece is built (keys, IAM statements, Strands hooks, API routes, probes) is in the detailed design, [arquitectura-agentes.md](arquitectura-agentes.md), which this document summarises and does not replace.
 
@@ -90,6 +90,7 @@ flowchart LR
 - Administrators version agents and skills, test and evaluate a version before publishing it, and roll back in one step.
 - Per-user monthly budgets with group defaults and exceptions, warnings at 80 % and a cut-off at 100 %.
 - Per-run limits for each agent: a long task stops and the user decides whether to continue.
+- The user can send messages while the agent works, and the agent takes them into account without stopping.
 
 ### Non-functional
 
@@ -135,7 +136,7 @@ flowchart LR
 | D12 | **No web browsing or web search** | AgentCore Browser, managed Web Search | Agents do not reach the internet; outside data comes as documents or through a specific MCP. |
 | D13 | **Two backend services**: `api` (app) and `admin` (panel) | One service | Two security surfaces; `admin` is not on the public API. |
 | D14 | **Four DynamoDB tables** (activity, configuration, OBO, audit) | One table | Permissions per table, different loads, configuration restorable on its own, OBO without backups. |
-| D15 | **TypeScript** for everything but the agent, **Python** for the kernel; a JSON Schema contract; **CDK**; one monorepo | Several repos and IaC tools | Shared types end to end; a contract change breaks the build, not production. |
+| D15 | **TypeScript** for everything but the agent and the iOS app, **Python** for the kernel, **Swift** for iOS; a JSON Schema contract; **CDK**; one monorepo | Several repos and IaC tools | Shared types end to end; a contract change breaks the build, not production. |
 
 ## 6. Logical view: components
 
@@ -144,8 +145,8 @@ The detailed diagram, with accounts, VPCs and numbered steps, is [arquitectura-a
 ```mermaid
 flowchart TB
   subgraph Clients
-    APP["Expo app<br/>iOS · web"]
-    PANEL["Admin panel<br/>Next.js"]
+    APP["iOS app · web SPA"]
+    PANEL["Admin panel<br/>SPA"]
   end
 
   subgraph Edge["Edge (iDMZ account)"]
@@ -196,8 +197,8 @@ flowchart TB
 
 | Component | Responsibility | Technology |
 |---|---|---|
-| **Expo app** | Chat UI with live streaming, files, tasks, memory, cost and push. A local cache on iOS. | Expo (iOS and web), assistant-ui |
-| **Admin panel** | Interface only; every action goes to `admin`. | Next.js, shadcn/ui |
+| **App** | Chat UI with live streaming, files, tasks, memory, cost and push. A local cache on iOS. | Swift and SwiftUI on iOS, with Intune; web SPA with Vite and assistant-ui |
+| **Admin panel** | Interface only; every action goes to `admin`. | SPA with Vite, shadcn/ui |
 | **API Gateway + authorizer** | Single public entry for the app: JWT validation, WAF, response streaming for SSE. | API Gateway REST, Lambda |
 | **`api`** | Checks access and budget, creates and launches runs, streams events over SSE, serves files, schedules tasks, stores and renews OBO tokens, sends push. | TypeScript, Fastify, Fargate |
 | **`admin`** | Writes agent versions, skills, models and prices, limits, users; launches ingestion and evaluations; reads audit. | TypeScript, Fastify, Fargate |
@@ -429,7 +430,7 @@ Per-run limits do a different job: they stop a long task from spending without t
 | **Cost** | Per-user budgets enforced by IAM; tokens costed from the invocation log; runtime and evaluations shown as platform cost; the test environment shuts down nights and weekends. |
 | **Observability** | W3C trace context from the app through `api`, the kernel, the hub and the MCPs; business ids (run, chat, agent, version) on every span; JSON logs linked to traces; a support code per message. |
 | **Quality of answers** | AgentCore Evaluations online on a sample of real sessions and in batch before each publication; user ratings feed the test sets. |
-| **Maintainability** | One monorepo, a JSON Schema contract that generates TypeScript and Python types, CDK for every resource, versioned agents and skills with one-step rollback. |
+| **Maintainability** | One monorepo, a JSON Schema contract that generates TypeScript, Python and Swift types, CDK for every resource, versioned agents and skills with one-step rollback. |
 | **Deployability** | New kernel images go to a test endpoint first; services roll out progressively; the API is versioned and old clients get a 426 to update. |
 
 ## 12. Risks, assumptions and open decisions

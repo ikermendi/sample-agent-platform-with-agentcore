@@ -40,6 +40,8 @@ class FakeModel(Model):
             resp = [texto("fin del guion")]
         else:
             resp = self.guion.pop(0)
+        if isinstance(resp, Exception):  # el guion también puede fallar
+            raise resp
         if isinstance(resp, dict):
             resp = [resp]
         yield {"messageStart": {"role": "assistant"}}

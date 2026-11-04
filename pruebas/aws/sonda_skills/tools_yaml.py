@@ -166,7 +166,7 @@ def diferencia(ant: Path, nueva: Path) -> list[str]:
         ra, rb = set(a["entrada"].get("required", [])), set(b["entrada"].get("required", []))
         if ra != rb:
             lineas.append(f"{n}: obligatorios {sorted(ra)} → {sorted(rb)}")
-        for campo in ("script", "descripcion", "escribe_ficheros", "confirmar", "tiempo_max_s", "etiqueta", "resumen"):
+        for campo in ("script", "descripcion", "escribe_ficheros", "confirmar", "tiempo_max_s", "etiqueta", "resumen", "detalle"):
             if a.get(campo) != b.get(campo):
                 lineas.append(f"{n}: {campo} {a.get(campo)!r} → {b.get(campo)!r}")
     la, lb = set(da.get("librerias", [])), set(dn.get("librerias", []))

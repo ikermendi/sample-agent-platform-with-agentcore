@@ -23,6 +23,7 @@ herramientas:
       required: [nombre_fichero, ruta, paginas]
     etiqueta: "Generando el PDF"   # lo que la app pinta en la tarjeta de la herramienta
     resumen: "PDF {nombre_fichero} ({paginas} págs.)"  # cómo se resume el resultado en el mensaje consolidado
+    detalle: completo              # qué ve el usuario al expandir la tarjeta: resumen (por defecto), entrada o completo
     escribe_ficheros: true         # la revisión lo muestra; tras la herramienta, el kernel sube los cambios
     confirmar: false               # true: pide aprobación del usuario antes de cada llamada
     tiempo_max_s: 60

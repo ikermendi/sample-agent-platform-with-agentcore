@@ -55,6 +55,7 @@
         },
         "etiqueta": { "type": "string", "minLength": 1, "maxLength": 60, "description": "Lo que pinta la app en la tarjeta de la herramienta." },
         "resumen": { "type": "string", "maxLength": 200, "description": "Cómo se resume el resultado en el mensaje consolidado; {campo} sale de la salida." },
+        "detalle": { "enum": ["resumen", "entrada", "completo"], "default": "resumen", "description": "Qué ve el usuario al expandir la tarjeta: solo el resumen, también los argumentos, o también el resultado." },
         "escribe_ficheros": { "type": "boolean", "default": false, "description": "Tras la herramienta, el kernel sube los cambios del espacio del chat." },
         "confirmar": { "type": "boolean", "default": false, "description": "Pide aprobación del usuario antes de cada llamada." },
         "tiempo_max_s": { "type": "integer", "minimum": 1, "maximum": 600, "default": 120 }

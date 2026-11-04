@@ -317,6 +317,7 @@ def paso_1():
 
     caso("nombre con guion", yaml_sub("nombre: generar_pdf", "nombre: generar-pdf"), "does not match")
     caso("campo desconocido", yaml_sub("escribe_ficheros:", "escribe_fichero:"), "Additional properties")
+    caso("detalle desconocido", yaml_sub("detalle: completo", "detalle: todo"), "is not one of")
     caso("sin formato", yaml_sub("formato: 1\n", ""), "'formato' is a required property")
     caso("nombre reservado", yaml_sub("nombre: generar_pdf", "nombre: skills"), "reservado")
     caso("script que no existe", yaml_sub("scripts/generar_pdf.py", "scripts/no_esta.py"), "no existe")

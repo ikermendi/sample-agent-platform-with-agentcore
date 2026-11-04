@@ -1,4 +1,4 @@
-"""Sonda 20: el plan en el chat con Claude de verdad (fila "Plan in the chat" de "To verify").
+"""Sonda 21: el plan en el chat con Claude de verdad (fila "Plan in the chat" de "To verify").
 
 Qué comprueba, con cada modelo de SONDA_MODELOS:
 

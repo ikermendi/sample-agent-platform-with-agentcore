@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://plataforma-agentes/schemas/tools.yaml/1",
+  "title": "tools.yaml of a skill version",
+  "description": "Which of the skill's scripts are exposed to the model as tools and how they are rendered. The panel validates it when a version is uploaded and the kernel when loading it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "tools"],
+  "properties": {
+    "format": {
+      "const": 1,
+      "description": "Version of this schema. An incompatible change raises the number, and the kernel accepts both during the transition."
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": { "$ref": "#/$defs/tool" }
+    },
+    "libraries": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$" },
+      "description": "Python modules the scripts import outside the standard library. They have to be in the kernel image."
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "script", "description", "input", "label"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]{0,47}$",
+          "description": "Name the model sees. Lowercase, digits and _ only: Strands treats - and _ as the same name, and Bedrock allows 64 characters."
+        },
+        "script": {
+          "type": "string",
+          "pattern": "^scripts/[A-Za-z0-9_][A-Za-z0-9_/-]*\\.py$",
+          "description": "Path of the script inside the version folder, always under scripts/."
+        },
+        "description": { "type": "string", "minLength": 10, "maxLength": 1024 },
+        "input": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "object" } },
+          "description": "JSON schema (2020-12) of the arguments. The kernel validates it before launching the script."
+        },
+        "output": {
+          "type": "object",
+          "required": ["type"],
+          "properties": { "type": { "const": "object" } },
+          "description": "JSON schema of what the script writes to stdout. If present, the kernel validates it and the summary can only use its fields."
+        },
+        "label": { "type": "string", "minLength": 1, "maxLength": 60, "description": "What the app renders on the tool card." },
+        "summary": { "type": "string", "maxLength": 200, "description": "How the result is summarised in the consolidated message; {field} comes from the output." },
+        "detail": { "enum": ["summary", "input", "full"], "default": "summary", "description": "What the user sees on expanding the card: the summary only, also the arguments, or also the result." },
+        "writes_files": { "type": "boolean", "default": false, "description": "After the tool, the kernel uploads the changes in the chat workspace." },
+        "confirm": { "type": "boolean", "default": false, "description": "Asks for the user's approval before each call." },
+        "max_time_s": { "type": "integer", "minimum": 1, "maximum": 600, "default": 120 }
+      }
+    }
+  }
+}

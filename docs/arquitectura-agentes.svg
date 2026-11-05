@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1760 1040" role="img" aria-labelledby="dg-title dg-desc">
+        <title id="dg-title">Architecture diagram</title>
+        <desc id="dg-desc">From left to right: the external side (iOS app, Entra ID, administrators, Akamai, Netskope, APNs); the iDMZ account (API Gateway REST with its authorizer, and the web ALB); the platform account in us-east-1 with the services VPC (internal NLB, web app, panel, Admin API, the api backend, which creates and launches runs, gateway, the entry of external tools with API keys, and three Lambdas, each in its own box: the watchdog, which finds dead runs every minute, the daily chat expiry, which calls deleteChat, and the chat deletion Lambda, which reads the chat deletion queue, stops the chat's microVM and deletes S3, messages, COST# and the chat, all three writing to DynamoDB; three more Lambdas, each in its own box, drawn next to DynamoDB, in the lower part of the same VPC frame: the run events Lambda, which reads the DynamoDB stream, closes with close(run_id) when it sees end, copies pending approvals and memory proposals into CTL# and notifies the backend of ends and pending approvals, the cost Lambda, which receives the Bedrock invocation log from CloudWatch Logs and writes the spend, the budget denial and the alerts, and the daily reconciliation Lambda, which compares the spend with that log and the bill), DynamoDB (four tables: activity, configuration, OBO and audit), the standard SQS task queue (Scheduler drops the firings and the backend reads them and launches them as a chat) and the chat deletion queue (deleteChat drops the chat, from the backend or the chat expiry Lambda, and the chat deletion Lambda deletes it), the agents VPC with the kernel on AgentCore Runtime V2, one microVM per chat, which calls Bedrock directly, and next to it the MCP integrations VPC with the MCP Hub, mcp-documents, mcp-time and other MCPs connected to the corporate network, and the regional services (SQS, EventBridge Scheduler, KMS, CloudWatch, Secrets Manager, S3, Bedrock and Knowledge Bases); at the bottom, the AgentCore managed service (Evaluations). The hub reads and marks approvals in DynamoDB (not drawn). The chat deletion queue has no arrows (deleteChat fills it and the chat deletion Lambda consumes it), like the hub's approvals.</desc>
+        <style>svg{--idmz:#b45309;--idmz-bg:#fdf3e7;--work:#0f766e;--work-bg:#e8f5f3;--core:#6d28d9;--core-bg:#f2edfd;--ext:#475569;--ext-bg:#eef1f5;--surface:#fff;--ink:#18202b;--muted:#5b6676;--line:#c9d0da;--wire:#3b4656;--accent:#1f6feb;--font-mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;--font-sans:"IBM Plex Sans",system-ui,sans-serif;--font-display:var(--font-sans);--font-body:var(--font-sans);--warn:#b91c1c;font-family:var(--font-sans);background:#fff}
+.frame { fill: none; stroke-width: 1.5; }
+.frame.idmz { stroke: var(--idmz); fill: var(--idmz-bg); }
+.frame.work { stroke: var(--work); fill: var(--work-bg); }
+.frame.vpc { stroke: var(--work); stroke-dasharray: 6 4; fill: var(--surface); fill-opacity: .55; }
+.frame.core { stroke: var(--core); fill: var(--core-bg); }
+.frame.engine { stroke: var(--core); stroke-dasharray: 6 4; fill: var(--surface); fill-opacity: .45; }
+.frame-label { font-family: var(--font-mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; font-weight: 500; }
+.frame-label.idmz { fill: var(--idmz); }
+.frame-label.ext { fill: var(--ext); }
+.frame-label.work { fill: var(--work); }
+.frame-label.core { fill: var(--core); }
+.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.box.ext { stroke: var(--ext); }
+.box.idmz { stroke: var(--idmz); }
+.box.work { stroke: var(--work); }
+.box.core { stroke: var(--core); }
+.box.br { stroke: var(--core); }
+.bt { font-family: var(--font-display); font-size: 14px; font-weight: 600; fill: var(--ink); }
+.bs { font-family: var(--font-body); font-size: 11.5px; fill: var(--muted); }
+.mono { font-family: var(--font-mono); font-size: 11px; fill: var(--muted); }
+.wire { fill: none; stroke: var(--wire); stroke-width: 1.6; }
+.wire.dash { stroke-dasharray: 5 4; }
+.wire.warn { stroke: var(--warn); stroke-dasharray: 5 4; }
+.wl { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+.badge circle { fill: var(--accent); }
+.badge text { font-family: var(--font-mono); font-size: 11px; font-weight: 600; fill: var(--surface); text-anchor: middle; dominant-baseline: central; }
+.bs-note { font-size: 12.5px; color: var(--muted); }</style>
+        <defs>
+          <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" style="fill: var(--wire)"/>
+          </marker>
+        </defs>
+        <text class="frame-label ext" x="20" y="62">External</text>
+        <rect class="frame idmz" x="240" y="40" width="270" height="470" rx="10"/>
+        <text class="frame-label idmz" x="254" y="62">iDMZ account</text>
+        <rect class="frame work" x="540" y="40" width="1200" height="790" rx="10"/>
+        <text class="frame-label work" x="554" y="62">Platform account · us-east-1</text>
+        <path class="frame vpc" d="M575,80 H1255 A10,10 0 0 1 1265,90 V390 A10,10 0 0 1 1255,400 H1128 V520 A10,10 0 0 1 1118,530 H846 A10,10 0 0 1 836,520 V400 H575 A10,10 0 0 1 565,390 V90 A10,10 0 0 1 575,80 Z"/>
+        <text class="frame-label work" x="579" y="102" style="font-size:10.5px">Services VPC · no IGW · VPC endpoints</text>
+        <rect class="frame engine" x="565" y="565" width="460" height="200" rx="10"/>
+        <text class="frame-label core" x="579" y="587" style="font-size:10.5px">Agents VPC · no routes · DNS Firewall</text>
+        <rect class="frame vpc" x="1060" y="565" width="655" height="200" rx="10"/>
+        <text class="frame-label work" x="1074" y="587" style="font-size:10.5px">MCP integrations VPC · → corporate network (TGW / DX / VPN)</text>
+        <text class="frame-label work" x="1280" y="62" style="font-size:10.5px">Regional services</text>
+        <rect class="frame core" x="240" y="860" width="790" height="155" rx="10"/>
+        <text class="frame-label core" x="254" y="882">Amazon Bedrock AgentCore · managed services</text>
+        <rect class="box ext" x="20" y="110" width="190" height="80" rx="8"/>
+        <text class="bt" x="32" y="132">iOS app</text>
+        <text class="bs" x="32" y="150">SwiftUI · web: assistant-ui</text>
+        <text class="bs" x="32" y="166">Entra (OIDC + PKCE) · SSE</text>
+        <rect class="box ext" x="20" y="220" width="190" height="85" rx="8"/>
+        <text class="bt" x="32" y="242">Microsoft Entra ID</text>
+        <text class="bs" x="32" y="260">sign-in · MFA · conditional</text>
+        <text class="bs" x="32" y="276">access · groups · OBO</text>
+        <rect class="box ext" x="20" y="335" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="357">Administrators</text>
+        <text class="bs" x="32" y="375">Entra admin groups</text>
+        <rect class="box ext" x="20" y="410" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="432">Akamai</text>
+        <text class="bs" x="32" y="450">CDN · WAF · panel, web app</text>
+        <rect class="box ext" x="20" y="560" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="582">Netskope</text>
+        <text class="bs" x="32" y="600">internet egress</text>
+        <rect class="box ext" x="20" y="640" width="190" height="55" rx="8"/>
+        <text class="bt" x="32" y="662">Apple APNs · Web Push</text>
+        <text class="bs" x="32" y="680">notifications</text>
+        <rect class="box idmz" x="260" y="95" width="230" height="105" rx="8"/>
+        <text class="bt" x="272" y="117">API Gateway REST</text>
+        <text class="bs" x="272" y="135">streaming (SSE) · per-IP WAF</text>
+        <text class="mono" x="272" y="151">/v1/chats /runs /agents /me/*</text>
+        <text class="mono" x="272" y="167">/telemetry /external/v1/*</text>
+        <text class="bs" x="272" y="185">→ platform via PrivateLink</text>
+        <rect class="box idmz" x="260" y="230" width="230" height="70" rx="8"/>
+        <text class="bt" x="272" y="252">Lambda authorizer</text>
+        <text class="bs" x="272" y="270">validates the Entra JWT</text>
+        <text class="bs" x="272" y="286">api reads oid and groups</text>
+        <rect class="box idmz" x="260" y="410" width="230" height="65" rx="8"/>
+        <text class="bt" x="272" y="432">Web ALB</text>
+        <text class="bs" x="272" y="450">panel and web app</text>
+        <text class="bs" x="272" y="466">from Akamai · PrivateLink</text>
+        <rect class="box work" x="590" y="110" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="132">Internal NLB</text>
+        <text class="bs" x="602" y="150">PrivateLink service</text>
+        <rect class="box work" x="590" y="180" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="202">Web app (SPA)</text>
+        <text class="bs" x="602" y="220">static · nginx · Fargate</text>
+        <rect class="box work" x="590" y="250" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="272">Admin panel</text>
+        <text class="bs" x="602" y="290">SPA · UI only</text>
+        <rect class="box work" x="590" y="320" width="200" height="50" rx="8"/>
+        <text class="bt" x="602" y="342">Admin API</text>
+        <text class="bs" x="602" y="360">panel logic · agents, skills…</text>
+        <rect class="box work" x="815" y="110" width="195" height="150" rx="8"/>
+        <text class="bt" x="827" y="132">Backend API</text>
+        <text class="bs" x="827" y="150">TypeScript · Fargate</text>
+        <text class="bs" x="827" y="166">stateless · SSE</text>
+        <text class="bs" x="827" y="182">creates and launches the run</text>
+        <text class="bs" x="827" y="198">STS · signing · OBO · push</text>
+        <rect class="box work" x="918" y="275" width="88" height="50" rx="8"/>
+        <text class="bt" x="928" y="297">gateway</text>
+        <text class="bs" x="928" y="315">API keys</text>
+        <rect class="box work" x="1050" y="110" width="185" height="50" rx="8"/>
+        <text class="bt" x="1062" y="132">Watchdog · Lambda</text>
+        <text class="bs" x="1062" y="150">dead runs · every minute</text>
+        <rect class="box work" x="1050" y="170" width="185" height="50" rx="8"/>
+        <text class="bt" x="1062" y="192">Chat expiry · Lambda</text>
+        <text class="bs" x="1062" y="210">daily · deleteChat</text>
+        <rect class="box work" x="1050" y="230" width="185" height="74" rx="8"/>
+        <text class="bt" x="1062" y="252">Chat deletion · Lambda</text>
+        <text class="bs" x="1062" y="268">reads the deletion queue</text>
+        <text class="bs" x="1062" y="282">stops the microVM · S3</text>
+        <text class="bs" x="1062" y="296">messages · COST# · chat</text>
+        <rect class="box work" x="590" y="440" width="230" height="80" rx="8"/>
+        <text class="bt" x="602" y="462">DynamoDB (4 tables)</text>
+        <text class="bs" x="602" y="480">activity: chats · runs</text>
+        <text class="bs" x="602" y="496">configuration: agents · limits</text>
+        <text class="bs" x="602" y="512">OBO (api only) · audit</text>
+        <rect class="box work" x="845" y="440" width="147" height="80" rx="8"/>
+        <text class="bt" x="857" y="462">Run events</text>
+        <text class="bs" x="857" y="480">Lambda · activity stream</text>
+        <text class="bs" x="857" y="496">end → close(run_id)</text>
+        <text class="bs" x="857" y="512">copies to CTL# · push</text>
+        <rect class="box work" x="1000" y="440" width="122" height="80" rx="8"/>
+        <text class="bt" x="1012" y="462">Cost · Lambda</text>
+        <text class="bs" x="1012" y="480">€ from Bedrock log</text>
+        <text class="bs" x="1012" y="496">USAGE · COST</text>
+        <text class="bs" x="1012" y="512">DENY (IAM) · push</text>
+        <rect class="box work" x="1130" y="440" width="105" height="80" rx="8"/>
+        <text class="bt" x="1140" y="462">Reconcile</text>
+        <text class="bs" x="1140" y="480">Lambda · daily</text>
+        <text class="bs" x="1140" y="496">spend vs log</text>
+        <text class="bs" x="1140" y="512">and bill</text>
+        <rect class="box core" x="590" y="598" width="415" height="160" rx="8"/>
+        <text class="bt" x="602" y="620">AgentCore Runtime V2 · kernel (Python, Strands)</text>
+        <text class="bs" x="602" y="638">1 microVM per chat · no user token</text>
+        <text class="bs" x="602" y="654">session STS credentials (agent's models)</text>
+        <text class="bs" x="602" y="670">models → Bedrock direct (VPC endpoints)</text>
+        <text class="bs" x="602" y="686">tools → MCP Hub (PrivateLink)</text>
+        <text class="bs" x="602" y="702">events and usage → DynamoDB · chat workspace ↔ S3</text>
+        <text class="mono" x="602" y="718">code: local (shell), in the microVM itself</text>
+        <rect class="box work" x="1085" y="600" width="160" height="150" rx="8"/>
+        <text class="bt" x="1097" y="622">MCP Hub</text>
+        <text class="bs" x="1097" y="640">TypeScript · Fargate</text>
+        <text class="bs" x="1097" y="656">PrivateLink (NLB)</text>
+        <text class="bs" x="1097" y="672">run token</text>
+        <text class="bs" x="1097" y="688">allow · approvals</text>
+        <text class="bs" x="1097" y="704">asks backend for OBO</text>
+        <text class="bs" x="1097" y="720">audit · fails closed</text>
+        <rect class="box work" x="1270" y="600" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="622">mcp-documents</text>
+        <text class="bs" x="1282" y="640">search_documents · mandatory agent and group filters</text>
+        <rect class="box work" x="1270" y="650" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="672">mcp-time</text>
+        <text class="bs" x="1282" y="690">current_time · echo · whoami (OBO test)</text>
+        <rect class="box work" x="1270" y="700" width="445" height="44" rx="8"/>
+        <text class="bt" x="1282" y="722">Other MCPs</text>
+        <text class="bs" x="1282" y="740">in-house or third-party → corporate network APIs</text>
+        <rect class="box work" x="1280" y="100" width="205" height="56" rx="8"/>
+        <text class="bt" x="1292" y="122">SQS · tasks</text>
+        <text class="bs" x="1292" y="140">task firings → api</text>
+        <rect class="box work" x="1505" y="100" width="210" height="56" rx="8"/>
+        <text class="bt" x="1517" y="122">EventBridge Scheduler</text>
+        <text class="bs" x="1517" y="140">one schedule per task</text>
+        <rect class="box work" x="1280" y="176" width="205" height="56" rx="8"/>
+        <text class="bt" x="1292" y="198">KMS</text>
+        <text class="bs" x="1292" y="216">customer-managed keys (CMK)</text>
+        <rect class="box work" x="1505" y="176" width="210" height="56" rx="8"/>
+        <text class="bt" x="1517" y="198">CloudWatch</text>
+        <text class="bs" x="1517" y="216">logs · traces · metrics</text>
+        <rect class="box work" x="1280" y="252" width="435" height="56" rx="8"/>
+        <text class="bt" x="1292" y="274">Secrets Manager</text>
+        <text class="bs" x="1292" y="292">Entra secret (OBO) · MCP credentials</text>
+        <rect class="box work" x="1280" y="328" width="435" height="56" rx="8"/>
+        <text class="bt" x="1292" y="350">SQS · chat deletion</text>
+        <text class="bs" x="1292" y="368">deleteChat (api, chat expiry) → chat deletion Lambda</text>
+        <rect class="box work" x="1280" y="430" width="125" height="90" rx="8"/>
+        <text class="bt" x="1292" y="452">S3</text>
+        <text class="bs" x="1292" y="470">chats · memory</text>
+        <text class="bs" x="1292" y="486">skills</text>
+        <text class="bs" x="1292" y="502">documents</text>
+        <rect class="box br" x="1425" y="430" width="135" height="90" rx="8"/>
+        <text class="bt" x="1437" y="452">Bedrock</text>
+        <text class="bs" x="1437" y="470">Claude</text>
+        <text class="bs" x="1437" y="486">direct</text>
+        <rect class="box br" x="1580" y="430" width="135" height="90" rx="8"/>
+        <text class="bt" x="1592" y="452">Knowledge</text>
+        <text class="bs" x="1592" y="470">Bases (RAG)</text>
+        <text class="bs" x="1592" y="486">filters by</text>
+        <text class="bs" x="1592" y="502">agent and group</text>
+        <rect class="box core" x="265" y="900" width="760" height="90" rx="8"/>
+        <text class="bt" x="277" y="922">AgentCore Evaluations</text>
+        <text class="bs" x="277" y="940">reads the kernel's OTEL traces in CloudWatch · online: % of real sessions</text>
+        <text class="bs" x="277" y="956">batch from the panel before publishing a version · scores per agent and version</text>
+        <path class="wire" d="M115,190 V217" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="115" cy="204" r="11"/><text x="115" y="204">1</text></g>
+        <path class="wire" d="M210,140 H257" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="235" cy="126" r="11"/><text x="235" y="126">2</text></g>
+        <g class="badge"><circle cx="235" cy="162" r="11"/><text x="235" y="162">10</text></g>
+        <path class="wire dash" d="M375,200 V227" marker-end="url(#arr)"/>
+        <path class="wire dash" d="M260,262 H213" marker-end="url(#arr)"/>
+        <text class="wl" x="216" y="256">JWKS</text>
+        <path class="wire" d="M490,122 H587" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="515" cy="122" r="11"/><text x="515" y="122">3</text></g>
+        <path class="wire" d="M790,135 H812" marker-end="url(#arr)"/>
+        <path class="wire" d="M115,390 V407" marker-end="url(#arr)"/>
+        <path class="wire" d="M210,437 H257" marker-end="url(#arr)"/>
+        <path class="wire" d="M490,442 H530 V140 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M690,160 V177" marker-end="url(#arr)"/>
+        <path class="wire" d="M590,150 H575 V345 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M575,275 H587" marker-end="url(#arr)"/>
+        <path class="wire" d="M685,370 V437" marker-end="url(#arr)"/>
+        <path class="wire" d="M1235,135 H1252 V392 H760 V437" marker-end="url(#arr)"/>
+        <path class="wire" d="M1235,195 H1252"/>
+        <path class="wire" d="M1235,262 H1252"/>
+        <path class="wire dash" d="M905,437 V263" marker-end="url(#arr)"/>
+        <text class="wl" x="913" y="372">push</text>
+        <path class="wire dash" d="M1015,437 V263" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="905" cy="330" r="11"/><text x="905" y="330">11</text></g>
+        <path class="wire" d="M818,260 V437" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="818" cy="350" r="11"/><text x="818" y="350">4</text></g>
+        <path class="wire" d="M820,468 H842" marker-end="url(#arr)"/>
+        <path class="wire" d="M845,495 H823" marker-end="url(#arr)"/>
+        <path class="wire" d="M1490,427 V412 H1060 V437" marker-end="url(#arr)"/>
+        <text class="wl" x="1258" y="406">invocation logging (CloudWatch Logs)</text>
+        <path class="wire" d="M1060,520 V538 H705 V523" marker-end="url(#arr)"/>
+        <path class="wire" d="M1380,97 V90 H900 V107" marker-end="url(#arr)"/>
+        <text class="wl" x="1000" y="66">reads task firings</text>
+        <path class="wire" d="M1505,128 H1488" marker-end="url(#arr)"/>
+        <path class="wire" d="M1010,245 H1024 V325 H1135 V544 H1000 V597" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1135" cy="360" r="11"/><text x="1135" y="360">5</text></g>
+        <text class="wl" x="1141" y="456"><tspan x="1141">Invoke</tspan><tspan x="1141" dy="13">Agent</tspan><tspan x="1141" dy="13">Runtime</tspan></text>
+        <path class="wire dash" d="M1200,597 V315 H1040 V214 H1013" marker-end="url(#arr)"/>
+        <text class="wl" x="1206" y="432">OBO token</text>
+        <path class="wire" d="M660,597 V523" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="660" cy="560" r="11"/><text x="660" y="560">9</text></g>
+        <path class="wire" d="M1005,615 H1048 V556 H1490 V523" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1440" cy="556" r="11"/><text x="1440" y="556">6</text></g>
+        <path class="wire" d="M1342,556 V523" marker-end="url(#arr)"/>
+        <path class="wire" d="M1005,700 H1082" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="1040" cy="700" r="11"/><text x="1040" y="700">7</text></g>
+        <path class="wire" d="M1245,622 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1245,672 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1245,722 H1267" marker-end="url(#arr)"/>
+        <path class="wire" d="M1600,600 V523" marker-end="url(#arr)"/>
+        <path class="wire" d="M990,110 V72 H550 V588 H213" marker-end="url(#arr)"/>
+        <text class="wl" x="530" y="612" text-anchor="end">internet egress via Netskope</text>
+        <g class="badge"><circle cx="550" cy="500" r="11"/><text x="550" y="500">12</text></g>
+        <path class="wire" d="M115,615 V637" marker-end="url(#arr)"/>
+        <path class="wire" d="M20,588 H8 V262 H17" marker-end="url(#arr)"/>
+        <g class="badge"><circle cx="985" cy="714" r="11"/><text x="985" y="714">8</text></g>
+      </svg>

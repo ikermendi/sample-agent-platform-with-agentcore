@@ -1,0 +1,29 @@
+# tools.yaml: cada entrada es una herramienta que el kernel registra al activar la skill
+format: 1
+tools:
+  - name: generar_pdf
+    script: scripts/generar_pdf.py
+    description: Convierte un Markdown del espacio del chat en un PDF en salida/. Devuelve el nombre del fichero y las páginas.
+    input:                       # esquema JSON de los argumentos; el kernel lo valida antes de lanzar el script
+      type: object
+      properties:
+        origen: { type: string, description: "Ruta del Markdown, relativa al espacio del chat", pattern: "^[^/].*\\.md$" }
+        titulo: { type: string, maxLength: 120 }
+      required: [origen]
+      additionalProperties: false
+    output:                        # lo que el script escribe en stdout; el resumen solo puede usar estos campos
+      type: object
+      properties:
+        nombre_fichero: { type: string }
+        ruta: { type: string }
+        paginas: { type: integer }
+        bytes: { type: integer }
+        variables_aws: { type: integer }   # solo para la sonda: cuántas AWS_* ve el script
+      required: [nombre_fichero, ruta, paginas]
+    label: "Generando el PDF"   # lo que la app pinta en la tarjeta de la herramienta
+    summary: "PDF {nombre_fichero} ({paginas} págs.)"  # cómo se resume el resultado en el mensaje consolidado
+    detail: full              # qué ve el usuario al expandir la tarjeta: summary (por defecto), input o full
+    writes_files: true         # la revisión lo muestra; tras la herramienta, el kernel sube los cambios
+    confirm: false               # true: pide aprobación del usuario antes de cada llamada
+    max_time_s: 60
+libraries: []                      # solo la biblioteca estándar; lo que se declare tiene que estar en la imagen del kernel

@@ -72,6 +72,7 @@ flowchart LR
 | Administrator | Publishes agents and skills, manages knowledge bases, models, budgets, users and evaluations. Three Entra roles: platform, budgets, content access. |
 | Microsoft Entra ID | Identity provider: sign-in, MFA, conditional access, groups, and OBO tokens for MCPs that act as the user. |
 | Amazon Bedrock | Models (Claude, through inference profiles) and Knowledge Bases for RAG. |
+| External platform | Where the agent lives when it is not ours: another agent platform, Claude Code or an automation. It calls models and MCPs with an API key created by a user, runs its own loop and acts as that user. |
 | Corporate systems | Internal APIs that MCPs call, reached only from the MCP integrations VPC. |
 | Akamai | CDN and WAF in front of the panel and the web app. The app's API does not go through it. |
 | Netskope | The only internet egress (Entra, APNs, Web Push). |
@@ -86,6 +87,7 @@ flowchart LR
 - Files in (attachments) and out (generated documents), per chat.
 - Scheduled tasks run an agent as the user, without the user present.
 - Sensitive tools require the user's explicit confirmation.
+- A user creates API keys with which an agent on another platform calls our models and MCPs; the spend goes to that user's budget.
 - A long-term memory per user that the user can see, edit and turn off.
 - Administrators version agents and skills, test and evaluate a version before publishing it, and roll back in one step.
 - Per-user monthly budgets with group defaults and exceptions, warnings at 80 % and a cut-off at 100 %.
@@ -137,6 +139,8 @@ flowchart LR
 | D13 | **Two backend services**: `api` (app) and `admin` (panel) | One service | Two security surfaces; `admin` is not on the public API. |
 | D14 | **Four DynamoDB tables** (activity, configuration, OBO, audit) | One table | Permissions per table, different loads, configuration restorable on its own, OBO without backups. |
 | D15 | **TypeScript** for everything but the agent and the iOS app, **Python** for the kernel, **Swift** for iOS; a JSON Schema contract; **CDK**; one monorepo | Several repos and IaC tools | Shared types end to end; a contract change breaks the build, not production. |
+| D16 | **One send route**: text sent during a run joins it, attachments wait in a local outbox | Separate routes to start a run and to join one; holding every message until the run ends | The app does not need to know whether a run is alive: `api` decides, and a second device follows the same run from the `run_id` it gets back. |
+| D17 | **API keys created by each user**, through a new `gateway`, give external tools models and MCPs directly, without an agent | Keys defined in the panel; LiteLLM; Bedrock API keys | The spend goes to the user's budget on the same path as an agent: Bedrock measures, IAM cuts off. D3 stays for agents: the kernel has no proxy. The price: data leaves the agents' boundary and keys skip MFA. |
 
 ## 6. Logical view: components
 
@@ -197,17 +201,18 @@ flowchart TB
 
 | Component | Responsibility | Technology |
 |---|---|---|
-| **App** | Chat UI with live streaming, files, tasks, memory, cost and push. A local cache on iOS. | Swift and SwiftUI on iOS, with Intune; web SPA with Vite and assistant-ui |
+| **App** | Chat UI with live streaming, files, tasks, memory, cost and push. A local cache on iOS and a per-chat outbox for messages that cannot go yet. | Swift and SwiftUI on iOS, with Intune; web SPA with Vite and assistant-ui |
 | **Admin panel** | Interface only; every action goes to `admin`. | SPA with Vite, shadcn/ui |
 | **API Gateway + authorizer** | Single public entry for the app: JWT validation, WAF, response streaming for SSE. | API Gateway REST, Lambda |
 | **`api`** | Checks access and budget, creates and launches runs, streams events over SSE, serves files, schedules tasks, stores and renews OBO tokens, sends push. | TypeScript, Fastify, Fargate |
 | **`admin`** | Writes agent versions, skills, models and prices, limits, users; launches ingestion and evaluations; reads audit. | TypeScript, Fastify, Fargate |
 | **Kernel** | Builds the agent from its version and runs the loop: model calls, tools through the hub, skills, sandboxed code, context management, events and files. | Python, Strands, AgentCore Runtime V2 |
+| **`gateway`** | Entry for external tools: verifies API keys, passes model calls to Bedrock with the user's identity, and forwards MCP calls to the hub with a signed key token. | TypeScript, Fargate |
 | **MCP Hub** | Single door for MCP tools: verifies the run token, applies the allow list and approvals, obtains OBO, audits, fails closed. | TypeScript, Fargate |
 | **Own MCPs** | `mcp-documents` (RAG with mandatory filters), `mcp-time` (end-to-end test of OBO) and future ones. | TypeScript, Fargate |
 | **Run events Lambda** | On the `end` event, closes the run (consolidated message, frees the chat, push). Copies approvals and memory proposals for the user. | Lambda on DynamoDB Streams |
 | **Cost Lambda** | Adds up spend per user, chat and run from the Bedrock invocation log; 80/100 % alerts; adds the IAM deny. | Lambda on CloudWatch Logs |
-| **Watchdog Lambda** | Every minute fails runs without heartbeat and closes runs left unclosed. | Lambda on EventBridge |
+| **Watchdog Lambda** | Every minute stops dead runs, ends them as `interrupted` and closes runs left unclosed. | Lambda on EventBridge |
 | **Chat expiry and deletion** | Expires chats after 12 months idle; physically deletes a chat (microVM, S3, DynamoDB). | Lambdas, SQS |
 | **Scheduler + tasks queue** | One schedule per task; the trigger lands in a queue that `api` consumes. | EventBridge Scheduler, SQS |
 | **DynamoDB** | Activity, configuration, OBO tokens and audit, in four tables. | DynamoDB on-demand |
@@ -231,9 +236,10 @@ sequenceDiagram
   participant C as Run events Lambda
 
   App->>API: send message
-  API->>API: access (Entra groups) · budget · one run per chat
+  API->>API: run in progress? · with none, access (Entra groups) and budget
   API->>D: create run (pending)
   API->>K: launch with STS credentials and run token
+  K->>D: running
   K-->>API: accepted
   API-->>App: 202 run_id
   App->>API: open SSE
@@ -243,22 +249,26 @@ sequenceDiagram
     K->>D: events, files, heartbeat
     API-->>App: new events over SSE
   end
-  K->>D: end
+  K->>D: end (microVM free)
   D->>C: stream
   C->>D: consolidated message · chat free
   C-->>API: push
 ```
 
 1. The app signs in with Entra and sends the message to the API Gateway, which validates the token.
-2. `api` checks that the user may use the agent and has budget, and that the chat has no run in progress.
-3. `api` creates the run, issues per-run STS credentials and a signed run token, and invokes the chat's microVM. A warm chat reuses its agent; a cold one starts from the Runtime V2 snapshot and rebuilds the conversation from S3.
+2. `api` looks at the chat. With no run in progress it checks that the user may use the agent and has budget, and launches one; with one, it checks the user may use the agent and the message joins it (see below).
+3. `api` creates the run, issues per-run STS credentials and a signed run token, and invokes the chat's microVM. A warm chat reuses its agent; a cold one starts from the Runtime V2 snapshot and rebuilds the conversation from S3. If the launch fails, `api` removes the run: a non-2xx response leaves no run, and the app keeps the message to retry with the same id.
 4. The kernel runs the agent loop: models in Bedrock, tools through the hub, skills and code in the microVM.
 5. The kernel writes every event to DynamoDB; `api` streams them to the app. The app can drop and reconnect without losing anything.
 6. On `end`, the run events Lambda turns the run into chat history, frees the chat and asks `api` for a push if the app is in the background.
 
+There is one send route, `POST /chats/{id}/messages`, also for Continue and resends. Text sent while a run is alive joins it, in task runs and after a cancel too: the agent reads it before its next model call, and no new run is created. `202` means saved, not delivered; `end` settles it. A message with attachments cannot join: it gets a `409` and waits in the app's outbox.
+
+The **outbox** is local and per chat. It also holds messages sent offline or with errors, and late ones. With the app open it sends them in order on `end`; after `cancelled` it waits for the user's next send. On reopening, the app offers them and never sends them alone.
+
 ### 7.2 A scheduled task
 
-EventBridge Scheduler drops the trigger into a queue that `api` consumes. `api` checks the task is active, the user still has access and budget, and launches the run exactly like a chat message, in the task's own chat. Tools that act as the user get OBO tokens renewed from the stored refresh token, so the user does not need to be present. If Entra rejects the renewal, or the task keeps failing, the task pauses and the user is notified.
+EventBridge Scheduler drops the trigger into a queue that `api` consumes. `api` checks the task is active, the user still has access and budget, and launches the run exactly like a chat message, in the task's own chat. If the launch fails there is no run: quota errors return the trigger to the queue, and a budget refusal counts as one more task failure. Tools that act as the user get OBO tokens renewed from the stored refresh token, so the user does not need to be present. If Entra rejects the renewal, or the task keeps failing, the task pauses and the user is notified.
 
 ### 7.3 A sensitive action
 
@@ -286,22 +296,27 @@ stateDiagram-v2
   direction LR
   [*] --> pending : api
   pending --> running : kernel accepts
-  pending --> failed : could not launch · watchdog
-  running --> finished : ok · limit · run_limit · timeout · approval_expired · error
-  running --> cancelled : user stops it
-  running --> failed : no heartbeat (watchdog) · chat deleted
-  finished --> [*]
-  cancelled --> [*]
-  failed --> [*]
+  pending --> [*] : launch fails (api removes it)
+  pending --> ended : watchdog · chat deleted
+  running --> ended : end, with its reason
+  ended --> [*]
 ```
 
-Every terminal state writes one `end` event, and every `end` is closed by one shared function. The watchdog is the safety net: a microVM that dies stops sending heartbeats, and within about 3 minutes the run is failed, the microVM stopped and the chat freed. A run lasts at most one hour, the life of its credentials; the kernel stops at 55 minutes.
+How a run ended goes in `reason`: `ok`, `cancelled`, `error`, `limit`, `run_limit`, `timeout`, `approval_expired` or `interrupted`.
+
+Every run that started ends with one `end` event, written in one transaction with the state by whoever ends it: the kernel, the watchdog or chat deletion. `api` never writes an ending. One shared function closes every `end` and always frees the chat, even if consolidation fails.
+
+`end` is the last thing a run does: the kernel cleans up first, so `end` means the microVM is free.
+
+The watchdog is the safety net: a microVM that dies stops sending heartbeats, and within about 3 minutes the microVM is stopped, the run ended as `interrupted` and the chat freed. A run that never reaches `running` is ended the same way. If the kernel writes `end` first, the kernel wins.
+
+A run lasts at most one hour, the life of its credentials. The kernel ends it with `timeout` at 55 minutes, or 5 minutes before the end of the microVM's 8-hour life, and the app offers Continue. This limit lives only in the kernel.
 
 ## 8. Data view
 
 | Store | Holds | Written by | Retention |
 |---|---|---|---|
-| DynamoDB · **activity** | Chats and consolidated messages, runs and their events, run controls (cancel, approvals, memory proposals), tasks, users, spend | `api`, kernel (only its own run), hub (approvals), Lambdas | Events 48 h; runs 90 days; chats 12 months from last activity; spend 13 months |
+| DynamoDB · **activity** | Chats and consolidated messages, runs and their events, run controls (cancel, messages during a run, approvals, memory proposals), tasks, users, spend | `api`, kernel (only its own run), hub (approvals), Lambdas | Events 48 h; runs 90 days; chats 12 months from last activity; spend 13 months |
 | DynamoDB · **configuration** | Agents and versions, skills, model catalogue and prices, limits, deny list | `admin`; deny list also cost Lambda and watchdog | No expiry; restorable on its own with PITR |
 | DynamoDB · **OBO** | Users' Entra tokens, encrypted | Only `api` | 90 days; no backups by design |
 | DynamoDB · **audit** | Agent and panel incidents | Each piece under its own prefix; never the kernel | 12 months |
@@ -350,9 +365,9 @@ flowchart LR
 
 | VPC | Contains | Egress | Reached by |
 |---|---|---|---|
-| **Services** | `api`, `admin`, panel, web app, internal NLB, Lambdas | Only the company egress VPC (Netskope): Entra, APNs, Web Push | iDMZ over PrivateLink; the hub, only for `/internal/obo` |
+| **Services** | `api`, `admin`, `gateway`, panel, web app, internal NLB, Lambdas | Only the company egress VPC (Netskope): Entra, APNs, Web Push | iDMZ over PrivateLink; the hub, only for `/internal/obo`. `gateway` reaches the hub over PrivateLink |
 | **Agents** | Kernel runtimes only | None | Nobody over the network; `api` uses the AgentCore API |
-| **MCP integrations** | MCP Hub, own MCPs | Corporate network (Transit Gateway, Direct Connect or VPN) | The kernel over PrivateLink |
+| **MCP integrations** | MCP Hub, own MCPs | Corporate network (Transit Gateway, Direct Connect or VPN) | The kernel and `gateway` over PrivateLink |
 
 - No IGW or NAT in any VPC, and no routes between them; every AWS service through VPC endpoints with restrictive policies.
 - **Route 53 DNS Firewall** on every VPC, with a strict allow list in the agents VPC, to close data exfiltration over DNS.
@@ -369,6 +384,8 @@ flowchart LR
 | Session STS credentials | Kernel (per run) | The version's models; that chat's files and conversation; that user's memory (read); that run's records | 1 h, not renewed |
 | Run token (KMS-signed) | Kernel → hub, `api` | User, groups, agent, version, allow list, knowledge bases | 1 h |
 | OBO token | `api` stores; hub caches per call | One MCP's audience, as the user | Access 1 h; refresh up to 90 days idle |
+| API key | External tool; the platform stores only its hash | That user and one API profile: models, read-only tools by default, Knowledge Bases. No `confirm` tools and no OBO MCPs | Up to 90 days; revocable in about 1 min |
+| Key token (KMS-signed) | `gateway` → hub, never the client | Same format as the run token, from the API profile | 15 min |
 | Runtime execution role | Kernel microVM | Pull the image, write logs and traces. Nothing else | Managed by AgentCore |
 | Service roles | `api`, `admin`, hub, each Lambda | Only what each one writes (see the detailed design) | Task or function |
 
@@ -401,6 +418,7 @@ flowchart LR
 - **Sensitive tools need a human.** The hub checks a one-time approval bound to the run and the exact arguments.
 - **Knowledge Bases are filtered by agent and group** inside `mcp-documents`, because IAM cannot enforce metadata filters.
 - **Access to the agents is by Entra group only**, checked on every message, not only in the catalogue.
+- **API keys are a different boundary.** Their spend is cut off by the same IAM deny, and the hub applies `allow` and audits, but prompts and what an MCP returns leave for the other platform, and the key skips MFA and conditional access. They are accepted only from known networks and approved platforms, by API profile, read-only by default, and checked against Entra every hour.
 - **Panel actions are role-based and audited**, including every opening of a user's conversation.
 
 ### Cost control
@@ -424,7 +442,7 @@ Per-run limits do a different job: they stop a long task from spending without t
 | Attribute | How the architecture achieves it |
 |---|---|
 | **Availability** | Stateless services in two zones; the kernel does not depend on the backend; SSE reconnects to any replica from DynamoDB; the watchdog frees chats whose microVM died. |
-| **Resilience** | Every component fails in a contained way: the hub fails closed, an MCP only fails its tools, quota errors retry with backoff and return 503 for the app to resend. See "What happens when each piece fails" in the detailed design. |
+| **Resilience** | Every component fails in a contained way: the hub fails closed, an MCP only fails its tools, quota errors retry with backoff and return 503, leaving no run, for the app to resend. See "What happens when each piece fails" in the detailed design. |
 | **Scalability** | One microVM per chat within AgentCore quotas (5,000 sessions, 25 new per second); DynamoDB on-demand; services scale by CPU and open connections; alarms at 70 % of every quota. |
 | **Performance** | Warm chats reuse the agent in memory; cold start about 2 s on V2; SSE polls DynamoDB every 300 ms while events flow. |
 | **Cost** | Per-user budgets enforced by IAM; tokens costed from the invocation log; runtime and evaluations shown as platform cost; the test environment shuts down nights and weekends. |
@@ -440,6 +458,8 @@ Most of the design has been checked on paper, locally or with probes against AWS
 | Item | Type | Impact if it goes wrong | How it is settled |
 |---|---|---|---|
 | OBO refresh token lifetime under the company's conditional access | Risk (blocks scheduled tasks) | Tasks that act as the user pause more often than expected | A test task with OBO run at 24 h and 7 days without the user |
+| API keys: internal data on another platform, and no MFA or conditional access | Risk (blocks) | Whoever holds a key reads what its profile allows, as the user, without OBO; the data is subject to the other platform's retention and security | Security review; which platforms and profiles are approved; WAF limited to known networks |
+| External tools competing for Bedrock quota | Risk | Heavy tools slow down the agents | Per-key limits in `gateway`, an alarm per profile, higher quotas or a separate account |
 | MCP Hub load distribution across zones | Risk (blocks) | One hub task takes all the traffic | Enable cross-zone on the NLB and measure |
 | Inference data residency (`us.` vs `global.` profiles) | Decision | `global.` is about 10 % cheaper but may process outside the US | Company decision; enforced with an SCP if geographic |
 | RAG store and group filtering (S3 Vectors vs OpenSearch) | Decision | Group lists may not fit the metadata filters | Same question set on both stores |
@@ -452,7 +472,7 @@ Most of the design has been checked on paper, locally or with probes against AWS
 
 | Term | Meaning |
 |---|---|
-| **Run** | One turn of the agent, from the message (or task trigger) to the `end` event. One hour at most. |
+| **Run** | One turn of the agent, from the message (or task trigger) to the `end` event. One hour at most. A message sent during a run joins it and creates no run. |
 | **Kernel** | The platform's own agent runtime (Python, Strands) on AgentCore Runtime V2; one kernel runs every agent. |
 | **Agent version** | Model, instructions, tools, skills, subagents, knowledge bases, code mode, memory and confirmations. Immutable once published. |
 | **Skill** | Versioned instructions and scripts; its scripts become typed tools when the agent activates it. |
@@ -460,7 +480,8 @@ Most of the design has been checked on paper, locally or with probes against AWS
 | **Run token** | A KMS-signed token that tells the hub and `api` which run is calling and what it may use. |
 | **OBO** | On-behalf-of: an Entra token with which an MCP acts as the user. |
 | **Allow list** | The hub tools an agent version may use, enforced by the hub. |
-| **Consolidated message** | What the user sees of a finished run in the chat history. |
+| **Consolidated message** | What the user sees of an ended run in the chat history. |
+| **Outbox** | The app's local, per-chat list of unconfirmed messages: attachments during a run, offline or failed sends, late messages. |
 | **iDMZ** | The edge AWS account, the only one reachable from outside. |
 
 ---

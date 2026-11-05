@@ -213,12 +213,13 @@ flowchart TB
 | **`admin`** | Writes agent versions, skills, models and prices, limits, users; launches ingestion and evaluations; reads audit. | TypeScript, Fastify, Fargate |
 | **Kernel** | Builds the agent from its version and runs the loop: model calls, tools through the hub, skills, sandboxed code, context management, events and files. | Python, Strands, AgentCore Runtime V2 |
 | **`gateway`** | Entry for external tools: verifies API keys, passes model calls to Bedrock with the user's identity, and forwards MCP calls to the hub with a signed key token. | TypeScript, Fargate |
-| **MCP Hub** | Single door for MCP tools: verifies the run token, applies the allow list and approvals, obtains OBO, audits, fails closed. | TypeScript, Fargate |
+| **MCP Hub** | Single door for MCP tools: verifies the run token, applies the allow list and approvals (the catalogue's and those the version adds, signed in the token), obtains OBO, audits, fails closed. | TypeScript, Fargate |
 | **Own MCPs** | `mcp-documents` (RAG with mandatory filters), `mcp-time` (end-to-end test of OBO) and future ones. | TypeScript, Fargate |
 | **Run events Lambda** | On the `end` event, closes the run (consolidated message, frees the chat, push). Copies approvals and memory proposals for the user. | Lambda on DynamoDB Streams |
 | **Cost Lambda** | Adds up spend per user, chat and run from the Bedrock invocation log; 80/100 % alerts; adds the IAM deny. | Lambda on CloudWatch Logs |
 | **Watchdog Lambda** | Every minute stops dead runs, ends them as `interrupted` and closes runs left unclosed. | Lambda on EventBridge |
 | **Chat expiry and deletion** | Expires chats after 12 months idle; physically deletes a chat (microVM, S3, DynamoDB). | Lambdas, SQS |
+| **Reconciliation** | Compares the spend every day with the Bedrock invocation log and the bill, and adds what is missing. | Lambda |
 | **Scheduler + tasks queue** | One schedule per task; the trigger lands in a queue that `api` consumes. | EventBridge Scheduler, SQS |
 | **DynamoDB** | Activity, configuration, OBO tokens and audit, in four tables. | DynamoDB on-demand |
 | **S3** | Chat workspaces (files and agent conversation), user memory, skill versions, RAG documents. | S3 |

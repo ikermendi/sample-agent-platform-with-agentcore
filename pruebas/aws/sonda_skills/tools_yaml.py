@@ -22,7 +22,7 @@ from strands.types.tools import AgentTool
 
 AQUI = Path(__file__).parent
 ESQUEMA = json.loads((AQUI / "esquema_tools.json").read_text())
-RESERVADOS = {"skills", "recordar", "retrieve_context"}  # herramientas del propio kernel
+RESERVADOS = {"skills", "add_memory", "retrieve_context", "update_plan", "shell", "python_repl"}  # herramientas del propio kernel
 
 
 # ---------------------------------------------------------------- panel: validar una versión
@@ -78,18 +78,18 @@ def validar_version(carpeta: Path, skill_id: str, paquetes_imagen: set[str]) -> 
     if errores:
         return doc, errores
 
-    declaradas = set(doc.get("librerias", []))
+    declaradas = set(doc.get("libraries", []))
     for falta in sorted(declaradas - paquetes_imagen):
         errores.append(f"librería {falta!r} no está en la imagen del kernel")
     vistos: set[str] = set()
-    for h in doc["herramientas"]:
-        n = h["nombre"]
+    for h in doc["tools"]:
+        n = h["name"]
         if n in vistos:
             errores.append(f"{n}: nombre repetido")
         vistos.add(n)
         if n in RESERVADOS:
             errores.append(f"{n}: nombre reservado del kernel")
-        for campo in ("entrada", "salida"):
+        for campo in ("input", "output"):
             if campo in h:
                 try:
                     Draft202012Validator.check_schema(h[campo])
@@ -103,11 +103,11 @@ def validar_version(carpeta: Path, skill_id: str, paquetes_imagen: set[str]) -> 
         else:
             ajenas = _importa(ruta) - set(sys.stdlib_module_names) - declaradas
             for m in sorted(ajenas):
-                errores.append(f"{n}: {h['script']} importa {m!r} sin declararlo en librerias")
-        if "resumen" in h:
-            campos = _campos(h["resumen"])
-            props = set(h.get("salida", {}).get("properties", {}))
-            if campos and "salida" not in h:
+                errores.append(f"{n}: {h['script']} importa {m!r} sin declararlo en libraries")
+        if "summary" in h:
+            campos = _campos(h["summary"])
+            props = set(h.get("output", {}).get("properties", {}))
+            if campos and "output" not in h:
                 errores.append(f"{n}: el resumen usa {sorted(campos)} pero no hay salida declarada")
             elif campos - props:
                 errores.append(f"{n}: el resumen usa campos que no están en la salida: {sorted(campos - props)}")
@@ -118,8 +118,8 @@ def validar_agente(skills: dict[str, dict], herramientas_hub: set[str]) -> list[
     """Al publicar una versión de agente: ningún nombre de herramienta repetido entre sus skills, el hub y el kernel."""
     errores, dueno = [], {n: "hub" for n in herramientas_hub} | {n: "kernel" for n in RESERVADOS}
     for skill, doc in skills.items():
-        for h in doc["herramientas"]:
-            n = h["nombre"]
+        for h in doc["tools"]:
+            n = h["name"]
             if n in dueno:
                 errores.append(f"{skill}: {n} ya lo da {dueno[n]}")
             else:
@@ -146,16 +146,16 @@ def diferencia(ant: Path, nueva: Path) -> list[str]:
         elif fa[f] != fn[f]:
             lineas.append(f"fichero cambiado: {f}")
     da, dn = (yaml.safe_load((c / "tools.yaml").read_text()) for c in (ant, nueva))
-    ha, hn = ({h["nombre"]: h for h in d["herramientas"]} for d in (da, dn))
+    ha, hn = ({h["name"]: h for h in d["tools"]} for d in (da, dn))
     for n in sorted(hn.keys() - ha.keys()):
         h = hn[n]
-        lineas.append(f"herramienta añadida: {n} (escribe_ficheros={h.get('escribe_ficheros', False)}, "
-                      f"confirmar={h.get('confirmar', False)})")
+        lineas.append(f"herramienta añadida: {n} (escribe_ficheros={h.get('writes_files', False)}, "
+                      f"confirmar={h.get('confirm', False)})")
     for n in sorted(ha.keys() - hn.keys()):
         lineas.append(f"herramienta quitada: {n}")
     for n in sorted(ha.keys() & hn.keys()):
         a, b = ha[n], hn[n]
-        pa, pb = _props(a["entrada"]), _props(b["entrada"])
+        pa, pb = _props(a["input"]), _props(b["input"])
         for p in sorted(pb.keys() - pa.keys()):
             lineas.append(f"{n}: parámetro nuevo {p} ({pb[p].get('type')})")
         for p in sorted(pa.keys() - pb.keys()):
@@ -163,13 +163,13 @@ def diferencia(ant: Path, nueva: Path) -> list[str]:
         for p in sorted(pa.keys() & pb.keys()):
             if pa[p] != pb[p]:
                 lineas.append(f"{n}: parámetro {p} cambia {pa[p]} → {pb[p]}")
-        ra, rb = set(a["entrada"].get("required", [])), set(b["entrada"].get("required", []))
+        ra, rb = set(a["input"].get("required", [])), set(b["input"].get("required", []))
         if ra != rb:
             lineas.append(f"{n}: obligatorios {sorted(ra)} → {sorted(rb)}")
-        for campo in ("script", "descripcion", "escribe_ficheros", "confirmar", "tiempo_max_s", "etiqueta", "resumen", "detalle"):
+        for campo in ("script", "description", "writes_files", "confirm", "max_time_s", "label", "summary", "detail"):
             if a.get(campo) != b.get(campo):
                 lineas.append(f"{n}: {campo} {a.get(campo)!r} → {b.get(campo)!r}")
-    la, lb = set(da.get("librerias", [])), set(dn.get("librerias", []))
+    la, lb = set(da.get("libraries", [])), set(dn.get("libraries", []))
     for l in sorted(lb - la):
         lineas.append(f"librería nueva: {l}")
     for l in sorted(la - lb):
@@ -195,18 +195,18 @@ class HerramientaDeScript(AgentTool):
 
     @property
     def tool_name(self) -> str:
-        return self.h["nombre"]
+        return self.h["name"]
 
     @property
     def tool_spec(self) -> dict:
-        return {"name": self.h["nombre"], "description": self.h["descripcion"], "inputSchema": {"json": self.h["entrada"]}}
+        return {"name": self.h["name"], "description": self.h["description"], "inputSchema": {"json": self.h["input"]}}
 
     @property
     def tool_type(self) -> str:
         return "skill_script"
 
     def resumen(self, salida: dict) -> str | None:
-        plantilla = self.h.get("resumen")
+        plantilla = self.h.get("summary")
         return plantilla.format(**salida) if plantilla else None
 
     async def stream(self, tool_use, invocation_state, **kwargs):
@@ -220,7 +220,7 @@ class HerramientaDeScript(AgentTool):
 
         if self.validar:
             errs = [f"{'/'.join(map(str, e.path)) or 'entrada'}: {e.message}"
-                    for e in Draft202012Validator(self.h["entrada"]).iter_errors(args)]
+                    for e in Draft202012Validator(self.h["input"]).iter_errors(args)]
             if errs:
                 yield error("Argumentos no válidos: " + "; ".join(errs))
                 return
@@ -229,10 +229,10 @@ class HerramientaDeScript(AgentTool):
             sys.executable, "-I", str(self.carpeta / self.h["script"]), cwd=self.espacio, env=entorno,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
-            out, err = await asyncio.wait_for(proc.communicate(json.dumps(args).encode()), self.h.get("tiempo_max_s", 120))
+            out, err = await asyncio.wait_for(proc.communicate(json.dumps(args).encode()), self.h.get("max_time_s", 120))
         except asyncio.TimeoutError:
             proc.kill()
-            yield error(f"El script tardó más de {self.h.get('tiempo_max_s', 120)} s")
+            yield error(f"El script tardó más de {self.h.get('max_time_s', 120)} s")
             return
         if proc.returncode != 0:
             yield error(f"El script falló ({proc.returncode}): {err.decode()[-500:]}")
@@ -242,8 +242,8 @@ class HerramientaDeScript(AgentTool):
         except json.JSONDecodeError:
             yield error("El script no devolvió JSON")
             return
-        if "salida" in self.h:
-            errs = [e.message for e in Draft202012Validator(self.h["salida"]).iter_errors(salida)]
+        if "output" in self.h:
+            errs = [e.message for e in Draft202012Validator(self.h["output"]).iter_errors(salida)]
             if errs:
                 yield error("Salida del script no válida: " + "; ".join(errs))
                 return

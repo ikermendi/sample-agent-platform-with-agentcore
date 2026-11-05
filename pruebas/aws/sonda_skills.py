@@ -207,11 +207,11 @@ RELLENO = {
 
 def tools_relleno(skill: str) -> dict:
     desc, nombres = RELLENO[skill]
-    return {"formato": 1, "librerias": [], "herramientas": [{
-        "nombre": n, "script": f"scripts/{n}.py", "etiqueta": n.replace("_", " "),
-        "descripcion": f"{desc} Esta herramienta ({n.replace('_', ' ')}) trabaja sobre ficheros del espacio del chat "
+    return {"format": 1, "libraries": [], "tools": [{
+        "name": n, "script": f"scripts/{n}.py", "label": n.replace("_", " "),
+        "description": f"{desc} Esta herramienta ({n.replace('_', ' ')}) trabaja sobre ficheros del espacio del chat "
                        f"y devuelve la ruta del resultado y un resumen de lo hecho, sin modificar los originales.",
-        "entrada": {"type": "object", "required": ["origen"], "additionalProperties": False, "properties": {
+        "input": {"type": "object", "required": ["origen"], "additionalProperties": False, "properties": {
             "origen": {"type": "string", "description": "Ruta del fichero de entrada, relativa al espacio del chat"},
             "destino": {"type": "string", "description": "Ruta del resultado; por defecto, en salida/ con el mismo nombre"},
             "opciones": {"type": "object", "description": "Opciones específicas de la operación",
@@ -221,7 +221,7 @@ def tools_relleno(skill: str) -> dict:
         }}} for n in nombres]}
 
 
-TODAS_LAS_DE_SKILLS = {h["nombre"] for s in RELLENO for h in tools_relleno(s)["herramientas"]} | {"generar_pdf"}
+TODAS_LAS_DE_SKILLS = {h["name"] for s in RELLENO for h in tools_relleno(s)["tools"]} | {"generar_pdf"}
 
 
 # ---------------------------------------------------------------- el kernel, en pequeño
@@ -267,12 +267,12 @@ class Kernel:
         return ty.HerramientaDeScript(skill, carpeta, h, self.espacio, validar=self.validar)
 
     def registrar(self, skill: str):
-        for h in self.versiones[skill][1]["herramientas"]:
-            if h["nombre"] in self.registradas:
+        for h in self.versiones[skill][1]["tools"]:
+            if h["name"] in self.registradas:
                 continue
             herramienta = self._herramienta(skill, h)
             self.agente.tool_registry.register_tool(herramienta)
-            self.registradas[h["nombre"]] = herramienta
+            self.registradas[h["name"]] = herramienta
             self.registros += 1
 
     def _al_terminar_herramienta(self, ev: AfterToolCallEvent):
@@ -315,11 +315,11 @@ def paso_1():
     def yaml_sub(a, b):
         return lambda d: (d / "tools.yaml").write_text((d / "tools.yaml").read_text().replace(a, b, 1))
 
-    caso("nombre con guion", yaml_sub("nombre: generar_pdf", "nombre: generar-pdf"), "does not match")
-    caso("campo desconocido", yaml_sub("escribe_ficheros:", "escribe_fichero:"), "Additional properties")
-    caso("detalle desconocido", yaml_sub("detalle: completo", "detalle: todo"), "is not one of")
-    caso("sin formato", yaml_sub("formato: 1\n", ""), "'formato' is a required property")
-    caso("nombre reservado", yaml_sub("nombre: generar_pdf", "nombre: skills"), "reservado")
+    caso("nombre con guion", yaml_sub("name: generar_pdf", "name: generar-pdf"), "does not match")
+    caso("campo desconocido", yaml_sub("writes_files:", "writes_file:"), "Additional properties")
+    caso("detalle desconocido", yaml_sub("detail: full", "detail: todo"), "is not one of")
+    caso("sin formato", yaml_sub("format: 1\n", ""), "'format' is a required property")
+    caso("nombre reservado", yaml_sub("name: generar_pdf", "name: skills"), "reservado")
     caso("script que no existe", yaml_sub("scripts/generar_pdf.py", "scripts/no_esta.py"), "no existe")
     caso("script enlazado fuera de scripts/",
          lambda d: ((d / "scripts" / "fuera.py").symlink_to("/etc/hosts"),
@@ -345,7 +345,7 @@ def paso_1():
           any("herramienta añadida: contar_paginas" in l for l in dif)
           and any("parámetro nuevo orientacion" in l for l in dif) and any("librería nueva: weasyprint" in l for l in dif))
 
-    otra = {"formato": 1, "herramientas": [dict(doc3["herramientas"][0])]}
+    otra = {"format": 1, "tools": [dict(doc3["tools"][0])]}
     e_ag = ty.validar_agente({"informe-pdf": doc3, "otra-pdf": otra}, {"buscar_documentos"})
     anota("1.4 al publicar un agente: dos skills con la misma herramienta", any("otra-pdf: generar_pdf ya lo da informe-pdf" in e for e in e_ag), "; ".join(e_ag))
     e_hub = ty.validar_agente({"informe-pdf": doc3}, {"generar_pdf"})

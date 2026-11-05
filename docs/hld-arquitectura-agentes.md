@@ -86,7 +86,7 @@ flowchart LR
 - A user can leave and come back: the run continues and the app catches up on reconnecting.
 - Files in (attachments) and out (generated documents), per chat.
 - Scheduled tasks run an agent as the user, without the user present.
-- Sensitive tools require the user's explicit confirmation.
+- Sensitive tools require the user's explicit confirmation in agents. Calls with an API key do not ask for it.
 - A user creates API keys with which an agent on another platform calls our models and MCPs; the spend goes to that user's budget.
 - A long-term memory per user that the user can see, edit and turn off.
 - Administrators version agents and skills, test and evaluate a version before publishing it, and roll back in one step.
@@ -140,7 +140,7 @@ flowchart LR
 | D14 | **Four DynamoDB tables** (activity, configuration, OBO, audit) | One table | Permissions per table, different loads, configuration restorable on its own, OBO without backups. |
 | D15 | **TypeScript** for everything but the agent and the iOS app, **Python** for the kernel, **Swift** for iOS; a JSON Schema contract; **CDK**; one monorepo | Several repos and IaC tools | Shared types end to end; a contract change breaks the build, not production. |
 | D16 | **One send route**: text sent during a run joins it, attachments wait in a local outbox | Separate routes to start a run and to join one; holding every message until the run ends | The app does not need to know whether a run is alive: `api` decides, and a second device follows the same run from the `run_id` it gets back. |
-| D17 | **API keys created by each user**, through a new `gateway`, give external tools models and MCPs directly, without an agent | Keys defined in the panel; LiteLLM; Bedrock API keys | The spend goes to the user's budget on the same path as an agent: Bedrock measures, IAM cuts off. D3 stays for agents: the kernel has no proxy. The price: data leaves the agents' boundary and keys skip MFA. |
+| D17 | **API keys created by each user**, through a new `gateway`, give external tools models and MCPs directly, without an agent | Keys defined in the panel; LiteLLM; Bedrock API keys | The spend goes to the user's budget on the same path as an agent: Bedrock measures, IAM cuts off. D3 stays for agents: the kernel has no proxy. The price: data leaves the agents' boundary, and keys skip MFA and confirmations. |
 
 ## 6. Logical view: components
 
@@ -151,6 +151,7 @@ flowchart TB
   subgraph Clients
     APP["iOS app · web SPA"]
     PANEL["Admin panel<br/>SPA"]
+    EXT["External tools<br/>API keys"]
   end
 
   subgraph Edge["Edge (iDMZ account)"]
@@ -161,6 +162,7 @@ flowchart TB
   subgraph Services["Platform services"]
     API["api<br/>chats · runs · SSE · files · tasks · OBO · push"]
     ADMIN["admin<br/>agents · skills · KBs · budgets · users · evals"]
+    GATE["gateway<br/>models and MCPs for API keys"]
     EV["Run events Lambda<br/>closes runs · approvals"]
     COST["Cost Lambda<br/>spend · alerts · IAM deny"]
     WD["Watchdog Lambda<br/>dead runs"]
@@ -186,6 +188,9 @@ flowchart TB
 
   APP --> GW --> API
   PANEL --> ALB --> ADMIN
+  EXT --> GW --> GATE
+  GATE --> BR
+  GATE --> HUB
   API -- "InvokeAgentRuntime" --> K
   SCH --> API
   K --> BR
@@ -268,7 +273,7 @@ The **outbox** is local and per chat. It also holds messages sent offline or wit
 
 ### 7.2 A scheduled task
 
-EventBridge Scheduler drops the trigger into a queue that `api` consumes. `api` checks the task is active, the user still has access and budget, and launches the run exactly like a chat message, in the task's own chat. If the launch fails there is no run: quota errors return the trigger to the queue, and a budget refusal counts as one more task failure. Tools that act as the user get OBO tokens renewed from the stored refresh token, so the user does not need to be present. If Entra rejects the renewal, or the task keeps failing, the task pauses and the user is notified.
+EventBridge Scheduler drops the trigger into a queue that `api` consumes. `api` checks the task is active, the user still has access and budget, and launches the run exactly like a chat message, in the task's own chat. If the launch fails there is no run: quota errors return the trigger to the queue, and no budget pauses the task, while an AgentCore error counts as one more failure. Tools that act as the user get OBO tokens renewed from the stored refresh token, so the user does not need to be present. If Entra rejects the renewal, or the task keeps failing, the task pauses and the user is notified.
 
 ### 7.3 A sensitive action
 
@@ -338,7 +343,7 @@ flowchart LR
   subgraph PLAT["Platform account · us-east-1"]
     subgraph SVC["Services VPC"]
       NLB["Internal NLB"]
-      API["api · admin · panel · web app · Lambdas"]
+      API["api · admin · gateway · panel · web app · Lambdas"]
     end
     subgraph AGT["Agents VPC · no egress"]
       K["Kernel runtimes"]
@@ -384,8 +389,8 @@ flowchart LR
 | Session STS credentials | Kernel (per run) | The version's models; that chat's files and conversation; that user's memory (read); that run's records | 1 h, not renewed |
 | Run token (KMS-signed) | Kernel → hub, `api` | User, groups, agent, version, allow list, knowledge bases | 1 h |
 | OBO token | `api` stores; hub caches per call | One MCP's audience, as the user | Access 1 h; refresh up to 90 days idle |
-| API key | External tool; the platform stores only its hash | That user and one API profile: models, read-only tools by default, Knowledge Bases. No `confirm` tools and no OBO MCPs | Up to 90 days; revocable in about 1 min |
-| Key token (KMS-signed) | `gateway` → hub, never the client | Same format as the run token, from the API profile | 15 min |
+| API key | External tool; the platform stores only its hash | That user and one API profile: models, read-only tools by default, Knowledge Bases. No confirmations and no OBO MCPs | Up to 90 days; revocable in about 1 min |
+| Key token (KMS-signed) | `gateway` → hub, never the client | Same format as the run token, from the API profile. The hub tells it apart by its `kind`, valid only with the `gateway` signature: no approvals, and it denies OBO MCPs | 15 min |
 | Runtime execution role | Kernel microVM | Pull the image, write logs and traces. Nothing else | Managed by AgentCore |
 | Service roles | `api`, `admin`, hub, each Lambda | Only what each one writes (see the detailed design) | Task or function |
 
@@ -418,7 +423,7 @@ flowchart LR
 - **Sensitive tools need a human.** The hub checks a one-time approval bound to the run and the exact arguments.
 - **Knowledge Bases are filtered by agent and group** inside `mcp-documents`, because IAM cannot enforce metadata filters.
 - **Access to the agents is by Entra group only**, checked on every message, not only in the catalogue.
-- **API keys are a different boundary.** Their spend is cut off by the same IAM deny, and the hub applies `allow` and audits, but prompts and what an MCP returns leave for the other platform, and the key skips MFA and conditional access. They are accepted only from known networks and approved platforms, by API profile, read-only by default, and checked against Entra every hour.
+- **API keys are a different boundary.** Their spend is cut off by the same IAM deny, and the hub applies `allow` and audits, but prompts and what an MCP returns leave for the other platform, and the key skips MFA and conditional access. Nobody confirms their tool calls, because no agent of ours is involved. They are accepted only from known networks and approved platforms, by API profile, read-only by default, and checked against Entra every hour.
 - **Panel actions are role-based and audited**, including every opening of a user's conversation.
 
 ### Cost control
@@ -458,8 +463,10 @@ Most of the design has been checked on paper, locally or with probes against AWS
 | Item | Type | Impact if it goes wrong | How it is settled |
 |---|---|---|---|
 | OBO refresh token lifetime under the company's conditional access | Risk (blocks scheduled tasks) | Tasks that act as the user pause more often than expected | A test task with OBO run at 24 h and 7 days without the user |
-| API keys: internal data on another platform, and no MFA or conditional access | Risk (blocks) | Whoever holds a key reads what its profile allows, as the user, without OBO; the data is subject to the other platform's retention and security | Security review; which platforms and profiles are approved; WAF limited to known networks |
+| API keys: internal data on another platform, and no MFA or conditional access | Risk (blocks) | Whoever holds a key uses what its profile allows, as the user, without OBO or confirmation; the data is subject to the other platform's retention and security | Security review; which platforms and profiles are approved; WAF limited to known networks |
 | External tools competing for Bedrock quota | Risk | Heavy tools slow down the agents | Per-key limits in `gateway`, an alarm per profile, higher quotas or a separate account |
+| iOS app in Swift: Markdown in streaming on a real iPhone, long answers and the background | Risk (blocks) | Chat stutters or loses the SSE on real devices | A real iPhone with the SwiftUI test |
+| Intune in the iOS app: policy, SDK with MSAL broker, selective wipe and signing | Risk (blocks) | The app cannot be distributed to employees | A minimal SwiftUI app with the Intune administrator |
 | MCP Hub load distribution across zones | Risk (blocks) | One hub task takes all the traffic | Enable cross-zone on the NLB and measure |
 | Inference data residency (`us.` vs `global.` profiles) | Decision | `global.` is about 10 % cheaper but may process outside the US | Company decision; enforced with an SCP if geographic |
 | RAG store and group filtering (S3 Vectors vs OpenSearch) | Decision | Group lists may not fit the metadata filters | Same question set on both stores |
